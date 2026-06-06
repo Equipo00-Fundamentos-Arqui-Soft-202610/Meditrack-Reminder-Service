@@ -1,0 +1,57 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{BBB30B43-CA0E-4C9C-8753-9C5B4C80AF6C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MediTrack.ReminderService.Domain", "src\MediTrack.ReminderService.Domain\MediTrack.ReminderService.Domain.csproj", "{77B3F791-F242-49CC-96A7-F9C2F1508071}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MediTrack.ReminderService.Application", "src\MediTrack.ReminderService.Application\MediTrack.ReminderService.Application.csproj", "{896AE6C3-7176-4F03-A957-C8A0408063B9}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MediTrack.ReminderService.Infrastructure", "src\MediTrack.ReminderService.Infrastructure\MediTrack.ReminderService.Infrastructure.csproj", "{43F4CC48-F3CB-452E-8510-B1B12EBF2247}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MediTrack.ReminderService.Api", "src\MediTrack.ReminderService.Api\MediTrack.ReminderService.Api.csproj", "{BD855A4B-422F-48BC-B972-ABEA80B0EF2D}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{D6D04B72-C6C2-406A-993C-1840448939FC}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MediTrack.ReminderService.Tests", "tests\MediTrack.ReminderService.Tests\MediTrack.ReminderService.Tests.csproj", "{404B7995-E4BB-4034-ABF2-B98504B8286A}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{77B3F791-F242-49CC-96A7-F9C2F1508071}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{77B3F791-F242-49CC-96A7-F9C2F1508071}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{77B3F791-F242-49CC-96A7-F9C2F1508071}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{77B3F791-F242-49CC-96A7-F9C2F1508071}.Release|Any CPU.Build.0 = Release|Any CPU
+		{896AE6C3-7176-4F03-A957-C8A0408063B9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{896AE6C3-7176-4F03-A957-C8A0408063B9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{896AE6C3-7176-4F03-A957-C8A0408063B9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{896AE6C3-7176-4F03-A957-C8A0408063B9}.Release|Any CPU.Build.0 = Release|Any CPU
+		{43F4CC48-F3CB-452E-8510-B1B12EBF2247}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{43F4CC48-F3CB-452E-8510-B1B12EBF2247}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{43F4CC48-F3CB-452E-8510-B1B12EBF2247}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{43F4CC48-F3CB-452E-8510-B1B12EBF2247}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BD855A4B-422F-48BC-B972-ABEA80B0EF2D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BD855A4B-422F-48BC-B972-ABEA80B0EF2D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BD855A4B-422F-48BC-B972-ABEA80B0EF2D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BD855A4B-422F-48BC-B972-ABEA80B0EF2D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{404B7995-E4BB-4034-ABF2-B98504B8286A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{404B7995-E4BB-4034-ABF2-B98504B8286A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{404B7995-E4BB-4034-ABF2-B98504B8286A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{404B7995-E4BB-4034-ABF2-B98504B8286A}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{77B3F791-F242-49CC-96A7-F9C2F1508071} = {BBB30B43-CA0E-4C9C-8753-9C5B4C80AF6C}
+		{896AE6C3-7176-4F03-A957-C8A0408063B9} = {BBB30B43-CA0E-4C9C-8753-9C5B4C80AF6C}
+		{43F4CC48-F3CB-452E-8510-B1B12EBF2247} = {BBB30B43-CA0E-4C9C-8753-9C5B4C80AF6C}
+		{BD855A4B-422F-48BC-B972-ABEA80B0EF2D} = {BBB30B43-CA0E-4C9C-8753-9C5B4C80AF6C}
+		{404B7995-E4BB-4034-ABF2-B98504B8286A} = {D6D04B72-C6C2-406A-993C-1840448939FC}
+	EndGlobalSection
+EndGlobal
