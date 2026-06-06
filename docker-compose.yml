@@ -1,0 +1,59 @@
+name: meditrack-reminder
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: meditrack-reminder-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: meditrack_reminder
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: meditrack-reminder-rabbitmq
+    ports:
+      - "5672:5672"     # protocolo AMQP
+      - "15672:15672"   # consola de administración
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  reminder-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: meditrack-reminder-service
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__ReminderDb: "Server=mysql;Port=3306;Database=meditrack_reminder;User=root;Password=root;"
+      Database__AutoMigrate: "true"
+      Swagger__Enabled: "true"
+      RabbitMq__Host: "rabbitmq"
+      RabbitMq__Port: "5672"
+      RabbitMq__UserName: "guest"
+      RabbitMq__Password: "guest"
+      Jwt__Issuer: "meditrack-gateway"
+      Jwt__Audience: "meditrack-services"
+      Jwt__Key: "CHANGE_ME_super_secret_signing_key_min_32_chars_long!"
+      Fcm__SimulateDelivery: "true"
+    ports:
+      - "8080:8080"
+
+volumes:
+  mysql-data:
