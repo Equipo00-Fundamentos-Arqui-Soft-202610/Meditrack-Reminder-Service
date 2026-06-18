@@ -7,7 +7,7 @@ namespace MediTrack.ReminderService.Domain.Repositories;
 /// </summary>
 public interface INotificationPreferenceRepository
 {
-    Task<NotificationPreference?> GetByPatientAsync(long patientId, CancellationToken cancellationToken = default);
+    Task<NotificationPreference?> GetByPatientAsync(int patientId, CancellationToken cancellationToken = default);
 
     Task AddAsync(NotificationPreference preference, CancellationToken cancellationToken = default);
 

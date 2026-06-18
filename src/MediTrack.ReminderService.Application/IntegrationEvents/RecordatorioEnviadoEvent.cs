@@ -13,7 +13,7 @@ public sealed record RecordatorioEnviadoEvent : IntegrationEvent
 
     public long ReminderId { get; init; }
 
-    public long PatientId { get; init; }
+    public int PatientId { get; init; }
 
     public ReminderEntityType EntityType { get; init; }
 

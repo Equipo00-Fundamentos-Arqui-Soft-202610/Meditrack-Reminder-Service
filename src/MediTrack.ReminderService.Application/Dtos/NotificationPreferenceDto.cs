@@ -4,7 +4,7 @@ namespace MediTrack.ReminderService.Application.Dtos;
 
 /// <summary>Vista de lectura de las preferencias de notificación de un paciente.</summary>
 public sealed record NotificationPreferenceDto(
-    long PatientId,
+    int PatientId,
     bool SoundEnabled,
     bool VibrationEnabled,
     int RepeatCount,

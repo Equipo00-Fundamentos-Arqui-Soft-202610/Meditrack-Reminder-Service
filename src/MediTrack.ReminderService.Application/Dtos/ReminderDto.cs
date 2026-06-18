@@ -5,7 +5,7 @@ namespace MediTrack.ReminderService.Application.Dtos;
 /// <summary>Vista de lectura de un recordatorio expuesta por la API.</summary>
 public sealed record ReminderDto(
     long Id,
-    long PatientId,
+    int PatientId,
     string EntityType,
     long EntityId,
     DateTime ScheduledAt,
