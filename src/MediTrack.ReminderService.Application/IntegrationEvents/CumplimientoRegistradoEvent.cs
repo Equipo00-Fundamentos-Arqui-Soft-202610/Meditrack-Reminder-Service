@@ -11,7 +11,7 @@ public sealed record CumplimientoRegistradoEvent : IntegrationEvent
 {
     public override string EventType => "CumplimientoRegistrado";
 
-    public long PatientId { get; init; }
+    public int PatientId { get; init; }
 
     public ReminderEntityType EntityType { get; init; }
 

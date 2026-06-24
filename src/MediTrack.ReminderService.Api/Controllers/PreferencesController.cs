@@ -22,9 +22,9 @@ public sealed class PreferencesController : ControllerBase
     /// <summary>Obtiene las preferencias de notificación del paciente (o las de por defecto).</summary>
     /// <param name="patientId">Identificador del paciente.</param>
     /// <response code="200">Preferencias del paciente.</response>
-    [HttpGet("patients/{patientId:long}")]
+    [HttpGet("patients/{patientId:int}")]
     [ProducesResponseType(typeof(NotificationPreferenceDto), StatusCodes.Status200OK)]
-    public async Task<ActionResult<NotificationPreferenceDto>> Get(long patientId, CancellationToken cancellationToken)
+    public async Task<ActionResult<NotificationPreferenceDto>> Get(int patientId, CancellationToken cancellationToken)
     {
         var preference = await _preferences.GetAsync(patientId, cancellationToken);
         return Ok(preference);
@@ -35,11 +35,11 @@ public sealed class PreferencesController : ControllerBase
     /// <param name="request">Nuevas preferencias.</param>
     /// <response code="200">Preferencias guardadas.</response>
     /// <response code="400">Datos inválidos (p. ej. repeticiones menores a 1).</response>
-    [HttpPut("patients/{patientId:long}")]
+    [HttpPut("patients/{patientId:int}")]
     [ProducesResponseType(typeof(NotificationPreferenceDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<NotificationPreferenceDto>> Upsert(
-        long patientId, [FromBody] UpdateNotificationPreferenceRequest request, CancellationToken cancellationToken)
+        int patientId, [FromBody] UpdateNotificationPreferenceRequest request, CancellationToken cancellationToken)
     {
         if (request.RepeatCount < 1)
             return BadRequest("Las repeticiones deben ser al menos 1.");

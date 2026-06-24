@@ -9,7 +9,7 @@ public sealed record RecetaCargadaEvent : IntegrationEvent
 {
     public override string EventType => "RecetaCargada";
 
-    public long PatientId { get; init; }
+    public int PatientId { get; init; }
 
     public long PrescriptionId { get; init; }
 

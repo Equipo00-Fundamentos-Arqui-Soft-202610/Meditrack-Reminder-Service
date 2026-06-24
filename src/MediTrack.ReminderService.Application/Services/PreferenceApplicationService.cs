@@ -26,7 +26,7 @@ public sealed class PreferenceApplicationService
         _logger = logger;
     }
 
-    public async Task<NotificationPreferenceDto> GetAsync(long patientId, CancellationToken cancellationToken = default)
+    public async Task<NotificationPreferenceDto> GetAsync(int patientId, CancellationToken cancellationToken = default)
     {
         var preference = await _preferences.GetByPatientAsync(patientId, cancellationToken)
                          ?? NotificationPreference.Default(patientId);
@@ -34,7 +34,7 @@ public sealed class PreferenceApplicationService
     }
 
     public async Task<NotificationPreferenceDto> UpsertAsync(
-        long patientId, UpdateNotificationPreferenceRequest request, CancellationToken cancellationToken = default)
+        int patientId, UpdateNotificationPreferenceRequest request, CancellationToken cancellationToken = default)
     {
         var existing = await _preferences.GetByPatientAsync(patientId, cancellationToken);
 

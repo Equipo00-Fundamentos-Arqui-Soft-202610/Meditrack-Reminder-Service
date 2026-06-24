@@ -14,7 +14,7 @@ public interface IReminderRepository
     Task<Reminder?> GetByIdAsync(long id, CancellationToken cancellationToken = default);
 
     /// <summary>Recordatorios activos (programados) de un paciente para GET /reminders/patients/{id}.</summary>
-    Task<IReadOnlyList<Reminder>> GetActiveByPatientAsync(long patientId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<Reminder>> GetActiveByPatientAsync(int patientId, CancellationToken cancellationToken = default);
 
     /// <summary>Recordatorios vencidos pendientes de envío, usados por el Scheduler.</summary>
     Task<IReadOnlyList<Reminder>> GetDueAsync(DateTime asOfUtc, int batchSize, CancellationToken cancellationToken = default);
@@ -24,7 +24,7 @@ public interface IReminderRepository
     /// cancelar al recibir CumplimientoRegistrado / cita cancelada.
     /// </summary>
     Task<IReadOnlyList<Reminder>> GetScheduledByEntityAsync(
-        long patientId, ReminderEntityType entityType, long entityId, CancellationToken cancellationToken = default);
+        int patientId, ReminderEntityType entityType, long entityId, CancellationToken cancellationToken = default);
 
     void Update(Reminder reminder);
 }
