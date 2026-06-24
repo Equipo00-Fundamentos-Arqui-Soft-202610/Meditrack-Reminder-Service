@@ -10,7 +10,10 @@ namespace MediTrack.ReminderService.Infrastructure.Messaging;
 /// </summary>
 public sealed class IntegrationEventSerializer
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+    };
 
     private static readonly IReadOnlyDictionary<string, Type> InboundTypes = new Dictionary<string, Type>
     {
