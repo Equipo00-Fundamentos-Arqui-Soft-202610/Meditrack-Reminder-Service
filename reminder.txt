@@ -1,0 +1,3992 @@
+=== ./src/MediTrack.ReminderService.Api/Controllers/PreferencesController.cs ===
+using MediTrack.ReminderService.Application.Dtos;
+using MediTrack.ReminderService.Application.Services;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+
+namespace MediTrack.ReminderService.Api.Controllers;
+
+/// <summary>
+/// "Preference Controller" (Fig. 17): expone los endpoints para consultar y
+/// configurar las preferencias de notificación del paciente (US22).
+/// </summary>
+[ApiController]
+[Authorize]
+[Route("reminders/preferences")]
+[Produces("application/json")]
+public sealed class PreferencesController : ControllerBase
+{
+    private readonly PreferenceApplicationService _preferences;
+
+    public PreferencesController(PreferenceApplicationService preferences) => _preferences = preferences;
+
+    /// <summary>Obtiene las preferencias de notificación del paciente (o las de por defecto).</summary>
+    /// <param name="patientId">Identificador del paciente.</param>
+    /// <response code="200">Preferencias del paciente.</response>
+    [HttpGet("patients/{patientId:long}")]
+    [ProducesResponseType(typeof(NotificationPreferenceDto), StatusCodes.Status200OK)]
+    public async Task<ActionResult<NotificationPreferenceDto>> Get(long patientId, CancellationToken cancellationToken)
+    {
+        var preference = await _preferences.GetAsync(patientId, cancellationToken);
+        return Ok(preference);
+    }
+
+    /// <summary>Crea o actualiza las preferencias de notificación del paciente.</summary>
+    /// <param name="patientId">Identificador del paciente.</param>
+    /// <param name="request">Nuevas preferencias.</param>
+    /// <response code="200">Preferencias guardadas.</response>
+    /// <response code="400">Datos inválidos (p. ej. repeticiones menores a 1).</response>
+    [HttpPut("patients/{patientId:long}")]
+    [ProducesResponseType(typeof(NotificationPreferenceDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<NotificationPreferenceDto>> Upsert(
+        long patientId, [FromBody] UpdateNotificationPreferenceRequest request, CancellationToken cancellationToken)
+    {
+        if (request.RepeatCount < 1)
+            return BadRequest("Las repeticiones deben ser al menos 1.");
+
+        var preference = await _preferences.UpsertAsync(patientId, request, cancellationToken);
+        return Ok(preference);
+    }
+}
+=== ./src/MediTrack.ReminderService.Api/Controllers/RemindersController.cs ===
+using MediTrack.ReminderService.Application.Dtos;
+using MediTrack.ReminderService.Application.Services;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+
+namespace MediTrack.ReminderService.Api.Controllers;
+
+/// <summary>
+/// "Reminder Controller" (Fig. 17): expone los endpoints para consultar los
+/// recordatorios activos de un paciente y cancelar un recordatorio.
+/// </summary>
+[ApiController]
+[Authorize]
+[Route("reminders")]
+[Produces("application/json")]
+public sealed class RemindersController : ControllerBase
+{
+    private readonly ScheduleApplicationService _schedule;
+
+    public RemindersController(ScheduleApplicationService schedule) => _schedule = schedule;
+
+    /// <summary>Lista los recordatorios activos (programados) de un paciente.</summary>
+    /// <param name="patientId">Identificador del paciente.</param>
+    /// <response code="200">Lista de recordatorios activos.</response>
+    [HttpGet("patients/{patientId:long}")]
+    [ProducesResponseType(typeof(IReadOnlyList<ReminderDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<IReadOnlyList<ReminderDto>>> GetByPatient(
+        long patientId, CancellationToken cancellationToken)
+    {
+        var reminders = await _schedule.GetActiveByPatientAsync(patientId, cancellationToken);
+        return Ok(reminders);
+    }
+
+    /// <summary>Cancela un recordatorio programado (p. ej. tras cumplir la dosis).</summary>
+    /// <param name="id">Identificador del recordatorio.</param>
+    /// <response code="204">Recordatorio cancelado.</response>
+    /// <response code="404">No existe un recordatorio con ese identificador.</response>
+    [HttpPut("{id:long}/cancel")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Cancel(long id, CancellationToken cancellationToken)
+    {
+        var cancelled = await _schedule.CancelReminderAsync(id, cancellationToken);
+        return cancelled ? NoContent() : NotFound();
+    }
+}
+=== ./src/MediTrack.ReminderService.Api/Extensions/AuthenticationServiceCollectionExtensions.cs ===
+using System.Text;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+
+namespace MediTrack.ReminderService.Api.Extensions;
+
+/// <summary>
+/// Configura la autenticación JWT. Conforme a CON-04, cada microservicio valida la
+/// firma del token de forma independiente (defensa en profundidad), sin confiar
+/// ciegamente en el API Gateway.
+/// </summary>
+public static class AuthenticationServiceCollectionExtensions
+{
+    public static IServiceCollection AddJwtAuthentication(this IServiceCollection services, IConfiguration configuration)
+    {
+        var jwtSection = configuration.GetSection("Jwt");
+        var signingKey = jwtSection["Key"]
+            ?? throw new InvalidOperationException("Falta la clave de firma JWT en 'Jwt:Key'.");
+
+        services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+            .AddJwtBearer(options =>
+            {
+                options.TokenValidationParameters = new TokenValidationParameters
+                {
+                    ValidateIssuer = true,
+                    ValidIssuer = jwtSection["Issuer"],
+                    ValidateAudience = true,
+                    ValidAudience = jwtSection["Audience"],
+                    ValidateLifetime = true,
+                    ValidateIssuerSigningKey = true,
+                    IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(signingKey)),
+                    ClockSkew = TimeSpan.FromSeconds(30)
+                };
+            });
+
+        services.AddAuthorization();
+        return services;
+    }
+}
+=== ./src/MediTrack.ReminderService.Api/Extensions/SwaggerServiceCollectionExtensions.cs ===
+using Microsoft.OpenApi.Models;
+
+namespace MediTrack.ReminderService.Api.Extensions;
+
+/// <summary>
+/// Configura la documentación OpenAPI/Swagger (exigida en 5.2.1). Incluye el esquema
+/// de seguridad Bearer para poder probar los endpoints autenticados desde Swagger UI.
+/// </summary>
+public static class SwaggerServiceCollectionExtensions
+{
+    public static IServiceCollection AddSwaggerDocumentation(this IServiceCollection services)
+    {
+        services.AddEndpointsApiExplorer();
+        services.AddSwaggerGen(options =>
+        {
+            options.SwaggerDoc("v1", new OpenApiInfo
+            {
+                Title = "MediTrack — Reminder Service API",
+                Version = "v1",
+                Description = "Microservicio de recordatorios de MediTrack. Genera, programa, "
+                            + "entrega (vía FCM) y cancela recordatorios de medicación, citas y exámenes."
+            });
+
+            var jwtScheme = new OpenApiSecurityScheme
+            {
+                Name = "Authorization",
+                Type = SecuritySchemeType.Http,
+                Scheme = "bearer",
+                BearerFormat = "JWT",
+                In = ParameterLocation.Header,
+                Description = "Introduce el token JWT (sin el prefijo 'Bearer ').",
+                Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "Bearer" }
+            };
+
+            options.AddSecurityDefinition("Bearer", jwtScheme);
+            options.AddSecurityRequirement(new OpenApiSecurityRequirement { [jwtScheme] = Array.Empty<string>() });
+
+            var xmlFile = $"{System.Reflection.Assembly.GetExecutingAssembly().GetName().Name}.xml";
+            var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
+            if (File.Exists(xmlPath))
+                options.IncludeXmlComments(xmlPath);
+        });
+
+        return services;
+    }
+}
+=== ./src/MediTrack.ReminderService.Api/Middleware/CorrelationIdMiddleware.cs ===
+namespace MediTrack.ReminderService.Api.Middleware;
+
+/// <summary>
+/// Propaga un correlation id en cada petición para el tracing distribuido (AC-11).
+/// Lo toma de la cabecera entrante o genera uno nuevo, y lo devuelve en la respuesta.
+/// </summary>
+public sealed class CorrelationIdMiddleware
+{
+    public const string HeaderName = "X-Correlation-ID";
+
+    private readonly RequestDelegate _next;
+    private readonly ILogger<CorrelationIdMiddleware> _logger;
+
+    public CorrelationIdMiddleware(RequestDelegate next, ILogger<CorrelationIdMiddleware> logger)
+    {
+        _next = next;
+        _logger = logger;
+    }
+
+    public async Task InvokeAsync(HttpContext context)
+    {
+        var correlationId = context.Request.Headers.TryGetValue(HeaderName, out var value) && !string.IsNullOrWhiteSpace(value)
+            ? value.ToString()
+            : Guid.NewGuid().ToString();
+
+        context.Items[HeaderName] = correlationId;
+        context.Response.OnStarting(() =>
+        {
+            context.Response.Headers[HeaderName] = correlationId;
+            return Task.CompletedTask;
+        });
+
+        using (_logger.BeginScope(new Dictionary<string, object> { ["CorrelationId"] = correlationId }))
+        {
+            await _next(context);
+        }
+    }
+}
+=== ./src/MediTrack.ReminderService.Api/obj/Debug/net8.0/.NETCoreApp,Version=v8.0.AssemblyAttributes.cs ===
+// <autogenerated />
+using System;
+using System.Reflection;
+[assembly: global::System.Runtime.Versioning.TargetFrameworkAttribute(".NETCoreApp,Version=v8.0", FrameworkDisplayName = ".NET 8.0")]
+=== ./src/MediTrack.ReminderService.Api/obj/Debug/net8.0/MediTrack.ReminderService.Api.AssemblyInfo.cs ===
+//------------------------------------------------------------------------------
+// <auto-generated>
+//     This code was generated by a tool.
+//
+//     Changes to this file may cause incorrect behavior and will be lost if
+//     the code is regenerated.
+// </auto-generated>
+//------------------------------------------------------------------------------
+
+using System;
+using System.Reflection;
+
+[assembly: System.Reflection.AssemblyCompanyAttribute("MediTrack.ReminderService.Api")]
+[assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
+[assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+d00ea168358d2a6bb2dc22f82c5896a73e385389")]
+[assembly: System.Reflection.AssemblyProductAttribute("MediTrack.ReminderService.Api")]
+[assembly: System.Reflection.AssemblyTitleAttribute("MediTrack.ReminderService.Api")]
+[assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
+
+// Generado por la clase WriteCodeFragment de MSBuild.
+
+=== ./src/MediTrack.ReminderService.Api/obj/Debug/net8.0/MediTrack.ReminderService.Api.GlobalUsings.g.cs ===
+// <auto-generated/>
+global using global::Microsoft.AspNetCore.Builder;
+global using global::Microsoft.AspNetCore.Hosting;
+global using global::Microsoft.AspNetCore.Http;
+global using global::Microsoft.AspNetCore.Routing;
+global using global::Microsoft.Extensions.Configuration;
+global using global::Microsoft.Extensions.DependencyInjection;
+global using global::Microsoft.Extensions.Hosting;
+global using global::Microsoft.Extensions.Logging;
+global using global::System;
+global using global::System.Collections.Generic;
+global using global::System.IO;
+global using global::System.Linq;
+global using global::System.Net.Http;
+global using global::System.Net.Http.Json;
+global using global::System.Threading;
+global using global::System.Threading.Tasks;
+=== ./src/MediTrack.ReminderService.Api/Persistence/ReminderDbContextFactory.cs ===
+using MediTrack.ReminderService.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Design;
+
+namespace MediTrack.ReminderService.Api.Persistence;
+
+/// <summary>
+/// Fábrica en tiempo de diseño para que la herramienta <c>dotnet ef</c> pueda crear
+/// y aplicar migraciones sin arrancar todo el host (RabbitMQ, hosted services, etc.).
+/// Toma la cadena de conexión de la variable de entorno
+/// <c>ConnectionStrings__ReminderDb</c> o usa un valor por defecto local.
+/// </summary>
+public sealed class ReminderDbContextFactory : IDesignTimeDbContextFactory<ReminderDbContext>
+{
+    public ReminderDbContext CreateDbContext(string[] args)
+    {
+        var connectionString = Environment.GetEnvironmentVariable("ConnectionStrings__ReminderDb")
+            ?? "Server=localhost;Port=3306;Database=meditrack_reminder;User=root;Password=root;";
+
+        var serverVersion = new MySqlServerVersion(new Version(8, 0, 36));
+        var options = new DbContextOptionsBuilder<ReminderDbContext>()
+            .UseMySql(connectionString, serverVersion, mySql =>
+                mySql.MigrationsAssembly(typeof(ReminderDbContext).Assembly.FullName))
+            .Options;
+
+        return new ReminderDbContext(options);
+    }
+}
+=== ./src/MediTrack.ReminderService.Api/Program.cs ===
+using MediTrack.ReminderService.Api.Extensions;
+using MediTrack.ReminderService.Api.Middleware;
+using MediTrack.ReminderService.Application;
+using MediTrack.ReminderService.Infrastructure;
+using MediTrack.ReminderService.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// --- Servicios ---
+builder.Services.AddControllers();
+builder.Services.AddSwaggerDocumentation();
+builder.Services.AddJwtAuthentication(builder.Configuration);
+
+builder.Services.AddApplication(builder.Configuration);
+builder.Services.AddInfrastructure(builder.Configuration);
+
+builder.Services.AddHealthChecks()
+    .AddDbContextCheck<ReminderDbContext>(name: "mysql", tags: new[] { "ready" });
+
+var app = builder.Build();
+
+// --- Migración automática opcional (entornos de desarrollo/contenedor) ---
+if (app.Configuration.GetValue<bool>("Database:AutoMigrate"))
+{
+    using var scope = app.Services.CreateScope();
+    var dbContext = scope.ServiceProvider.GetRequiredService<ReminderDbContext>();
+    await dbContext.Database.MigrateAsync();
+}
+
+// --- Pipeline HTTP ---
+app.UseMiddleware<CorrelationIdMiddleware>();
+
+if (app.Environment.IsDevelopment() || app.Configuration.GetValue<bool>("Swagger:Enabled"))
+{
+    app.UseSwagger();
+    app.UseSwaggerUI(options =>
+    {
+        options.SwaggerEndpoint("/swagger/v1/swagger.json", "Reminder Service API v1");
+        options.DocumentTitle = "MediTrack — Reminder Service";
+    });
+}
+
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapControllers();
+app.MapHealthChecks("/health");
+
+app.Run();
+
+/// <summary>Punto de entrada expuesto para las pruebas de integración (WebApplicationFactory).</summary>
+public partial class Program { }
+=== ./src/MediTrack.ReminderService.Application/Abstractions/IClock.cs ===
+namespace MediTrack.ReminderService.Application.Abstractions;
+
+/// <summary>
+/// Abstracción del reloj del sistema. Permite controlar el tiempo en pruebas
+/// (evita dependencias ocultas de DateTime.UtcNow).
+/// </summary>
+public interface IClock
+{
+    DateTime UtcNow { get; }
+}
+=== ./src/MediTrack.ReminderService.Application/Abstractions/IDelayProvider.cs ===
+namespace MediTrack.ReminderService.Application.Abstractions;
+
+/// <summary>
+/// Abstracción de la espera entre reintentos (backoff). En producción usa
+/// Task.Delay; en pruebas se sustituye por una implementación instantánea.
+/// </summary>
+public interface IDelayProvider
+{
+    Task DelayAsync(TimeSpan delay, CancellationToken cancellationToken = default);
+}
+=== ./src/MediTrack.ReminderService.Application/Abstractions/IIntegrationEventPublisher.cs ===
+using MediTrack.ReminderService.Application.IntegrationEvents;
+
+namespace MediTrack.ReminderService.Application.Abstractions;
+
+/// <summary>
+/// Puerto para publicar eventos de integración hacia el Message Bus (RabbitMQ).
+/// La implementación encola el evento en el Outbox dentro de la misma transacción
+/// local (patrón Outbox, AC-08); un publicador en background lo entrega luego.
+/// </summary>
+public interface IIntegrationEventPublisher
+{
+    Task EnqueueAsync(IntegrationEvent integrationEvent, CancellationToken cancellationToken = default);
+}
+=== ./src/MediTrack.ReminderService.Application/Abstractions/INotificationSender.cs ===
+namespace MediTrack.ReminderService.Application.Abstractions;
+
+/// <summary>
+/// Puerto de salida hacia el proveedor de notificaciones push. Lo implementa el
+/// "Notification Adapter" sobre Firebase Cloud Messaging (CON-05). Devuelve el
+/// resultado del intento para que la capa de aplicación decida reintentos y fallback.
+/// </summary>
+public interface INotificationSender
+{
+    Task<NotificationDeliveryResult> SendAsync(NotificationMessage message, CancellationToken cancellationToken = default);
+}
+
+/// <summary>Resultado de un intento de entrega.</summary>
+/// <param name="Success">true si el proveedor aceptó la entrega.</param>
+/// <param name="ProviderMessageId">Identificador devuelto por el proveedor (si lo hay).</param>
+/// <param name="Error">Detalle del error cuando <paramref name="Success"/> es false.</param>
+public sealed record NotificationDeliveryResult(bool Success, string? ProviderMessageId = null, string? Error = null)
+{
+    public static NotificationDeliveryResult Ok(string? providerMessageId = null) => new(true, providerMessageId);
+    public static NotificationDeliveryResult Fail(string error) => new(false, null, error);
+}
+=== ./src/MediTrack.ReminderService.Application/Abstractions/NotificationMessage.cs ===
+using MediTrack.ReminderService.Domain.Enums;
+
+namespace MediTrack.ReminderService.Application.Abstractions;
+
+/// <summary>
+/// Mensaje listo para entregar a través de un canal de notificación. El destino
+/// es un "topic" de FCM por paciente (<c>patient_{id}</c>), de modo que el Reminder
+/// Service no necesita almacenar tokens de dispositivo (desacoplamiento).
+/// </summary>
+public sealed record NotificationMessage(
+    long PatientId,
+    string Topic,
+    string Title,
+    string Body,
+    bool SoundEnabled,
+    bool VibrationEnabled,
+    NotificationChannel Channel);
+=== ./src/MediTrack.ReminderService.Application/Configuration/ReminderNotificationOptions.cs ===
+namespace MediTrack.ReminderService.Application.Configuration;
+
+/// <summary>
+/// Parámetros del envío de notificaciones y la política de reintentos con backoff
+/// exponencial (AC-02). Se enlazan desde appsettings (sección "ReminderNotification").
+/// </summary>
+public sealed class ReminderNotificationOptions
+{
+    public const string SectionName = "ReminderNotification";
+
+    /// <summary>Número máximo de intentos por el canal push antes del fallback.</summary>
+    public int MaxAttempts { get; set; } = 3;
+
+    /// <summary>Retardo base del backoff exponencial, en segundos (delay = base * 2^intento).</summary>
+    public double BaseDelaySeconds { get; set; } = 2;
+
+    /// <summary>Prefijo del topic de FCM por paciente.</summary>
+    public string FcmTopicPrefix { get; set; } = "patient_";
+
+    /// <summary>Activa el canal de fallback local cuando se agotan los reintentos push (AC-09).</summary>
+    public bool EnableLocalFallback { get; set; } = true;
+
+    public TimeSpan BackoffFor(int attempt) =>
+        TimeSpan.FromSeconds(BaseDelaySeconds * Math.Pow(2, attempt));
+}
+=== ./src/MediTrack.ReminderService.Application/DependencyInjection.cs ===
+using MediTrack.ReminderService.Application.Configuration;
+using MediTrack.ReminderService.Application.Services;
+using MediTrack.ReminderService.Domain.Factories;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace MediTrack.ReminderService.Application;
+
+/// <summary>
+/// Registro de la capa de aplicación: fábricas de recordatorios (Factory Method),
+/// el selector de fábricas y los Application Services.
+/// </summary>
+public static class DependencyInjection
+{
+    public static IServiceCollection AddApplication(this IServiceCollection services, IConfiguration configuration)
+    {
+        services.Configure<ReminderNotificationOptions>(
+            configuration.GetSection(ReminderNotificationOptions.SectionName));
+
+        // Fábricas concretas del patrón Factory Method (una por tipo de recordatorio).
+        services.AddSingleton<ReminderFactory, MedicationReminderFactory>();
+        services.AddSingleton<ReminderFactory, AppointmentReminderFactory>();
+        services.AddSingleton<ReminderFactory, ExamReminderFactory>();
+        services.AddSingleton<IReminderFactoryProvider, ReminderFactoryProvider>();
+
+        // Application Services (uno por controlador / responsabilidad).
+        services.AddScoped<ScheduleApplicationService>();
+        services.AddScoped<NotificationApplicationService>();
+        services.AddScoped<PreferenceApplicationService>();
+
+        return services;
+    }
+}
+=== ./src/MediTrack.ReminderService.Application/Dtos/NotificationPreferenceDto.cs ===
+using MediTrack.ReminderService.Domain.Entities;
+
+namespace MediTrack.ReminderService.Application.Dtos;
+
+/// <summary>Vista de lectura de las preferencias de notificación de un paciente.</summary>
+public sealed record NotificationPreferenceDto(
+    long PatientId,
+    bool SoundEnabled,
+    bool VibrationEnabled,
+    int RepeatCount,
+    bool GlobalEnabled)
+{
+    public static NotificationPreferenceDto FromEntity(NotificationPreference preference) => new(
+        preference.PatientId,
+        preference.SoundEnabled,
+        preference.VibrationEnabled,
+        preference.RepeatCount,
+        preference.GlobalEnabled);
+}
+
+/// <summary>Cuerpo de la petición para actualizar las preferencias (US22).</summary>
+public sealed record UpdateNotificationPreferenceRequest(
+    bool SoundEnabled,
+    bool VibrationEnabled,
+    int RepeatCount,
+    bool GlobalEnabled);
+=== ./src/MediTrack.ReminderService.Application/Dtos/ReminderDto.cs ===
+using MediTrack.ReminderService.Domain.Entities;
+
+namespace MediTrack.ReminderService.Application.Dtos;
+
+/// <summary>Vista de lectura de un recordatorio expuesta por la API.</summary>
+public sealed record ReminderDto(
+    long Id,
+    long PatientId,
+    string EntityType,
+    long EntityId,
+    DateTime ScheduledAt,
+    string Status,
+    string Title,
+    string Body,
+    DateTime? CancelledAt)
+{
+    public static ReminderDto FromEntity(Reminder reminder) => new(
+        reminder.Id,
+        reminder.PatientId,
+        reminder.EntityType.ToString(),
+        reminder.EntityId,
+        reminder.ScheduledAt,
+        reminder.Status.ToString(),
+        reminder.Title,
+        reminder.Body,
+        reminder.CancelledAt);
+}
+=== ./src/MediTrack.ReminderService.Application/IntegrationEvents/CitaAgendadaEvent.cs ===
+namespace MediTrack.ReminderService.Application.IntegrationEvents;
+
+/// <summary>
+/// Publicado por el Medical Appointment Service al agendar una cita (US08). El
+/// Reminder Service genera un recordatorio con 24 h de anticipación (US09).
+/// </summary>
+public sealed record CitaAgendadaEvent : IntegrationEvent
+{
+    public override string EventType => "CitaAgendada";
+
+    public long PatientId { get; init; }
+
+    public long AppointmentId { get; init; }
+
+    public string AppointmentType { get; init; } = string.Empty;
+
+    public string? Location { get; init; }
+
+    public DateTime AppointmentDateUtc { get; init; }
+}
+=== ./src/MediTrack.ReminderService.Application/IntegrationEvents/CumplimientoRegistradoEvent.cs ===
+using MediTrack.ReminderService.Domain.Enums;
+
+namespace MediTrack.ReminderService.Application.IntegrationEvents;
+
+/// <summary>
+/// Publicado por el Follow-up Service al registrar un cumplimiento (US06). El
+/// Reminder Service lo consume y cancela el recordatorio pendiente asociado a la
+/// entidad cumplida (patrón Observer, 4.1.6).
+/// </summary>
+public sealed record CumplimientoRegistradoEvent : IntegrationEvent
+{
+    public override string EventType => "CumplimientoRegistrado";
+
+    public long PatientId { get; init; }
+
+    public ReminderEntityType EntityType { get; init; }
+
+    public long EntityId { get; init; }
+}
+=== ./src/MediTrack.ReminderService.Application/IntegrationEvents/IntegrationEvent.cs ===
+namespace MediTrack.ReminderService.Application.IntegrationEvents;
+
+/// <summary>
+/// Base de los eventos de integración intercambiados por RabbitMQ. Incluye un
+/// identificador único para idempotencia (Inbox) y un correlation id para tracing
+/// distribuido (AC-11).
+/// </summary>
+public abstract record IntegrationEvent
+{
+    public Guid EventId { get; init; } = Guid.NewGuid();
+
+    public DateTime OccurredAtUtc { get; init; } = DateTime.UtcNow;
+
+    public string? CorrelationId { get; init; }
+
+    /// <summary>Nombre estable usado como routing key en RabbitMQ.</summary>
+    public abstract string EventType { get; }
+}
+=== ./src/MediTrack.ReminderService.Application/IntegrationEvents/RecetaCargadaEvent.cs ===
+namespace MediTrack.ReminderService.Application.IntegrationEvents;
+
+/// <summary>
+/// Publicado por el Treatment Service al cargar una receta (US13). El Reminder
+/// Service lo consume y genera, vía Factory Method, un recordatorio por cada
+/// horario de dosis incluido.
+/// </summary>
+public sealed record RecetaCargadaEvent : IntegrationEvent
+{
+    public override string EventType => "RecetaCargada";
+
+    public long PatientId { get; init; }
+
+    public long PrescriptionId { get; init; }
+
+    public IReadOnlyList<MedicationScheduleItem> Medications { get; init; } = Array.Empty<MedicationScheduleItem>();
+}
+
+/// <summary>Una toma programada de un medicamento dentro de la receta.</summary>
+/// <param name="MedicationId">Id del medicamento en el Treatment Service.</param>
+/// <param name="Name">Nombre del medicamento.</param>
+/// <param name="Dose">Dosis (p. ej. "500 mg").</param>
+/// <param name="DoseTimeUtc">Hora exacta de la toma.</param>
+public sealed record MedicationScheduleItem(
+    long MedicationId,
+    string Name,
+    string Dose,
+    DateTime DoseTimeUtc);
+=== ./src/MediTrack.ReminderService.Application/IntegrationEvents/RecordatorioEnviadoEvent.cs ===
+using MediTrack.ReminderService.Domain.Enums;
+
+namespace MediTrack.ReminderService.Application.IntegrationEvents;
+
+/// <summary>
+/// Publicado por el Reminder Service tras entregar (o fallar) un recordatorio.
+/// Permite que el Medical Analysis Service alimente sus métricas de adherencia.
+/// Se emite mediante el patrón Outbox para garantizar entrega confiable (AC-08).
+/// </summary>
+public sealed record RecordatorioEnviadoEvent : IntegrationEvent
+{
+    public override string EventType => "RecordatorioEnviado";
+
+    public long ReminderId { get; init; }
+
+    public long PatientId { get; init; }
+
+    public ReminderEntityType EntityType { get; init; }
+
+    public long EntityId { get; init; }
+
+    public NotificationChannel Channel { get; init; }
+
+    public bool Delivered { get; init; }
+
+    public DateTime SentAtUtc { get; init; }
+}
+=== ./src/MediTrack.ReminderService.Application/IntegrationEvents/StockBajoEvent.cs ===
+namespace MediTrack.ReminderService.Application.IntegrationEvents;
+
+/// <summary>
+/// Publicado por el Treatment Service cuando el stock de un medicamento alcanza el
+/// umbral (US07, 3 unidades). El Reminder Service genera una alerta inmediata al
+/// paciente para que reabastezca.
+/// </summary>
+public sealed record StockBajoEvent : IntegrationEvent
+{
+    public override string EventType => "StockBajo";
+
+    public long PatientId { get; init; }
+
+    public long MedicationId { get; init; }
+
+    public string MedicationName { get; init; } = string.Empty;
+
+    public int RemainingUnits { get; init; }
+}
+=== ./src/MediTrack.ReminderService.Application/obj/Debug/net8.0/.NETCoreApp,Version=v8.0.AssemblyAttributes.cs ===
+// <autogenerated />
+using System;
+using System.Reflection;
+[assembly: global::System.Runtime.Versioning.TargetFrameworkAttribute(".NETCoreApp,Version=v8.0", FrameworkDisplayName = ".NET 8.0")]
+=== ./src/MediTrack.ReminderService.Application/obj/Debug/net8.0/MediTrack.ReminderService.Application.AssemblyInfo.cs ===
+//------------------------------------------------------------------------------
+// <auto-generated>
+//     This code was generated by a tool.
+//
+//     Changes to this file may cause incorrect behavior and will be lost if
+//     the code is regenerated.
+// </auto-generated>
+//------------------------------------------------------------------------------
+
+using System;
+using System.Reflection;
+
+[assembly: System.Reflection.AssemblyCompanyAttribute("MediTrack.ReminderService.Application")]
+[assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
+[assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+d00ea168358d2a6bb2dc22f82c5896a73e385389")]
+[assembly: System.Reflection.AssemblyProductAttribute("MediTrack.ReminderService.Application")]
+[assembly: System.Reflection.AssemblyTitleAttribute("MediTrack.ReminderService.Application")]
+[assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
+
+// Generado por la clase WriteCodeFragment de MSBuild.
+
+=== ./src/MediTrack.ReminderService.Application/obj/Debug/net8.0/MediTrack.ReminderService.Application.GlobalUsings.g.cs ===
+// <auto-generated/>
+global using global::System;
+global using global::System.Collections.Generic;
+global using global::System.IO;
+global using global::System.Linq;
+global using global::System.Net.Http;
+global using global::System.Threading;
+global using global::System.Threading.Tasks;
+=== ./src/MediTrack.ReminderService.Application/Services/NotificationApplicationService.cs ===
+using MediTrack.ReminderService.Application.Abstractions;
+using MediTrack.ReminderService.Application.Configuration;
+using MediTrack.ReminderService.Application.IntegrationEvents;
+using MediTrack.ReminderService.Domain.Entities;
+using MediTrack.ReminderService.Domain.Enums;
+using MediTrack.ReminderService.Domain.Repositories;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
+namespace MediTrack.ReminderService.Application.Services;
+
+/// <summary>
+/// "Notification Application Service" (Fig. 17): orquesta el disparo de la
+/// notificación push de un recordatorio vencido. Aplica las preferencias del
+/// paciente, ejecuta reintentos con backoff exponencial ante fallos de FCM (AC-02),
+/// activa el fallback local (AC-09), registra la bitácora y publica
+/// <see cref="RecordatorioEnviadoEvent"/> vía Outbox.
+/// </summary>
+public sealed class NotificationApplicationService
+{
+    private readonly IReminderRepository _reminders;
+    private readonly INotificationPreferenceRepository _preferences;
+    private readonly INotificationSender _sender;
+    private readonly IIntegrationEventPublisher _publisher;
+    private readonly IUnitOfWork _unitOfWork;
+    private readonly IClock _clock;
+    private readonly IDelayProvider _delay;
+    private readonly ReminderNotificationOptions _options;
+    private readonly ILogger<NotificationApplicationService> _logger;
+
+    public NotificationApplicationService(
+        IReminderRepository reminders,
+        INotificationPreferenceRepository preferences,
+        INotificationSender sender,
+        IIntegrationEventPublisher publisher,
+        IUnitOfWork unitOfWork,
+        IClock clock,
+        IDelayProvider delay,
+        IOptions<ReminderNotificationOptions> options,
+        ILogger<NotificationApplicationService> logger)
+    {
+        _reminders = reminders;
+        _preferences = preferences;
+        _sender = sender;
+        _publisher = publisher;
+        _unitOfWork = unitOfWork;
+        _clock = clock;
+        _delay = delay;
+        _options = options.Value;
+        _logger = logger;
+    }
+
+    /// <summary>
+    /// Despacha un recordatorio vencido. Devuelve true si quedó entregado (push o
+    /// fallback), false si el paciente tiene las notificaciones desactivadas o si
+    /// se agotaron los intentos sin entrega.
+    /// </summary>
+    public async Task<bool> DispatchAsync(Reminder reminder, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(reminder);
+
+        var preference = await _preferences.GetByPatientAsync(reminder.PatientId, cancellationToken)
+                         ?? NotificationPreference.Default(reminder.PatientId);
+
+        // US22: interruptor maestro. Si está desactivado, no se envía nada.
+        if (!preference.GlobalEnabled)
+        {
+            _logger.LogInformation(
+                "Notificaciones desactivadas para el paciente {PatientId}; se omite el recordatorio {ReminderId}.",
+                reminder.PatientId, reminder.Id);
+            return false;
+        }
+
+        var message = BuildMessage(reminder, preference, NotificationChannel.Push);
+        var delivered = await TryDeliverWithRetriesAsync(reminder, message, cancellationToken);
+
+        if (!delivered && _options.EnableLocalFallback)
+            delivered = ActivateLocalFallback(reminder);
+
+        if (!delivered)
+            reminder.MarkAsFailed();
+
+        _reminders.Update(reminder);
+        await PublishOutcomeAsync(reminder, delivered, cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return delivered;
+    }
+
+    private async Task<bool> TryDeliverWithRetriesAsync(
+        Reminder reminder, NotificationMessage message, CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < _options.MaxAttempts; attempt++)
+        {
+            var result = await _sender.SendAsync(message, cancellationToken);
+
+            if (result.Success)
+            {
+                reminder.RegisterDeliveryAttempt(NotificationChannel.Push, DeliveryStatus.Delivered, _clock.UtcNow);
+                _logger.LogInformation(
+                    "Recordatorio {ReminderId} entregado vía push en el intento {Attempt}.", reminder.Id, attempt + 1);
+                return true;
+            }
+
+            reminder.RegisterDeliveryAttempt(NotificationChannel.Push, DeliveryStatus.Failed, _clock.UtcNow);
+            _logger.LogWarning(
+                "Fallo de entrega push del recordatorio {ReminderId} (intento {Attempt}): {Error}.",
+                reminder.Id, attempt + 1, result.Error);
+
+            var isLastAttempt = attempt == _options.MaxAttempts - 1;
+            if (!isLastAttempt)
+                await _delay.DelayAsync(_options.BackoffFor(attempt), cancellationToken);
+        }
+
+        return false;
+    }
+
+    private bool ActivateLocalFallback(Reminder reminder)
+    {
+        // AC-09: la app programa una notificación local sobre su almacenamiento
+        // offline. Se registra el handoff como canal de respaldo.
+        reminder.RegisterDeliveryAttempt(NotificationChannel.Local, DeliveryStatus.Delivered, _clock.UtcNow);
+        _logger.LogInformation(
+            "Activado fallback local para el recordatorio {ReminderId} tras agotar los reintentos push.", reminder.Id);
+        return true;
+    }
+
+    private NotificationMessage BuildMessage(Reminder reminder, NotificationPreference preference, NotificationChannel channel) =>
+        new(
+            reminder.PatientId,
+            $"{_options.FcmTopicPrefix}{reminder.PatientId}",
+            reminder.Title,
+            reminder.Body,
+            preference.SoundEnabled,
+            preference.VibrationEnabled,
+            channel);
+
+    private async Task PublishOutcomeAsync(Reminder reminder, bool delivered, CancellationToken cancellationToken)
+    {
+        var lastChannel = reminder.NotificationLogs.LastOrDefault()?.Channel ?? NotificationChannel.Push;
+        var @event = new RecordatorioEnviadoEvent
+        {
+            ReminderId = reminder.Id,
+            PatientId = reminder.PatientId,
+            EntityType = reminder.EntityType,
+            EntityId = reminder.EntityId,
+            Channel = lastChannel,
+            Delivered = delivered,
+            SentAtUtc = _clock.UtcNow
+        };
+        await _publisher.EnqueueAsync(@event, cancellationToken);
+    }
+}
+=== ./src/MediTrack.ReminderService.Application/Services/PreferenceApplicationService.cs ===
+using MediTrack.ReminderService.Application.Dtos;
+using MediTrack.ReminderService.Domain.Entities;
+using MediTrack.ReminderService.Domain.Repositories;
+using Microsoft.Extensions.Logging;
+
+namespace MediTrack.ReminderService.Application.Services;
+
+/// <summary>
+/// "Preference Application Service" (Fig. 17): gestiona las preferencias de
+/// notificación por paciente (US22). Si un paciente no tiene configuración, expone
+/// los valores por defecto sin persistirlos hasta que decida cambiarlos.
+/// </summary>
+public sealed class PreferenceApplicationService
+{
+    private readonly INotificationPreferenceRepository _preferences;
+    private readonly IUnitOfWork _unitOfWork;
+    private readonly ILogger<PreferenceApplicationService> _logger;
+
+    public PreferenceApplicationService(
+        INotificationPreferenceRepository preferences,
+        IUnitOfWork unitOfWork,
+        ILogger<PreferenceApplicationService> logger)
+    {
+        _preferences = preferences;
+        _unitOfWork = unitOfWork;
+        _logger = logger;
+    }
+
+    public async Task<NotificationPreferenceDto> GetAsync(long patientId, CancellationToken cancellationToken = default)
+    {
+        var preference = await _preferences.GetByPatientAsync(patientId, cancellationToken)
+                         ?? NotificationPreference.Default(patientId);
+        return NotificationPreferenceDto.FromEntity(preference);
+    }
+
+    public async Task<NotificationPreferenceDto> UpsertAsync(
+        long patientId, UpdateNotificationPreferenceRequest request, CancellationToken cancellationToken = default)
+    {
+        var existing = await _preferences.GetByPatientAsync(patientId, cancellationToken);
+
+        if (existing is null)
+        {
+            var created = NotificationPreference.Default(patientId);
+            created.Update(request.SoundEnabled, request.VibrationEnabled, request.RepeatCount, request.GlobalEnabled);
+            await _preferences.AddAsync(created, cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+            _logger.LogInformation("Preferencias creadas para el paciente {PatientId}.", patientId);
+            return NotificationPreferenceDto.FromEntity(created);
+        }
+
+        existing.Update(request.SoundEnabled, request.VibrationEnabled, request.RepeatCount, request.GlobalEnabled);
+        _preferences.Update(existing);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        _logger.LogInformation("Preferencias actualizadas para el paciente {PatientId}.", patientId);
+        return NotificationPreferenceDto.FromEntity(existing);
+    }
+}
+=== ./src/MediTrack.ReminderService.Application/Services/ScheduleApplicationService.cs ===
+using MediTrack.ReminderService.Application.Dtos;
+using MediTrack.ReminderService.Application.IntegrationEvents;
+using MediTrack.ReminderService.Domain.Entities;
+using MediTrack.ReminderService.Domain.Enums;
+using MediTrack.ReminderService.Domain.Factories;
+using MediTrack.ReminderService.Domain.Repositories;
+using Microsoft.Extensions.Logging;
+
+namespace MediTrack.ReminderService.Application.Services;
+
+/// <summary>
+/// "Schedule Application Service" (Fig. 17): orquesta la PROGRAMACIÓN y la
+/// CANCELACIÓN de recordatorios en respuesta a los eventos clínicos y a las
+/// peticiones REST. Usa el Factory Method para construir cada recordatorio y el
+/// Repository para persistirlo.
+/// </summary>
+public sealed class ScheduleApplicationService
+{
+    private readonly IReminderRepository _reminders;
+    private readonly IReminderFactoryProvider _factories;
+    private readonly IUnitOfWork _unitOfWork;
+    private readonly Abstractions.IClock _clock;
+    private readonly ILogger<ScheduleApplicationService> _logger;
+
+    public ScheduleApplicationService(
+        IReminderRepository reminders,
+        IReminderFactoryProvider factories,
+        IUnitOfWork unitOfWork,
+        Abstractions.IClock clock,
+        ILogger<ScheduleApplicationService> logger)
+    {
+        _reminders = reminders;
+        _factories = factories;
+        _unitOfWork = unitOfWork;
+        _clock = clock;
+        _logger = logger;
+    }
+
+    /// <summary>Genera un recordatorio de medicación por cada toma de la receta (US05/US13).</summary>
+    public async Task HandleRecetaCargadaAsync(RecetaCargadaEvent @event, CancellationToken cancellationToken = default)
+    {
+        var factory = _factories.For(ReminderEntityType.Medication);
+
+        foreach (var med in @event.Medications)
+        {
+            var context = new ReminderCreationContext(
+                @event.PatientId, med.MedicationId, med.DoseTimeUtc, med.Name, med.Dose);
+            var reminder = factory.CreateReminder(context);
+            await _reminders.AddAsync(reminder, cancellationToken);
+        }
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        _logger.LogInformation(
+            "Generados {Count} recordatorios de medicación para el paciente {PatientId} (receta {PrescriptionId}).",
+            @event.Medications.Count, @event.PatientId, @event.PrescriptionId);
+    }
+
+    /// <summary>Genera un recordatorio de cita con 24 h de anticipación (US09).</summary>
+    public async Task HandleCitaAgendadaAsync(CitaAgendadaEvent @event, CancellationToken cancellationToken = default)
+    {
+        var factory = _factories.For(ReminderEntityType.Appointment);
+        var context = new ReminderCreationContext(
+            @event.PatientId, @event.AppointmentId, @event.AppointmentDateUtc, @event.AppointmentType, @event.Location);
+
+        var reminder = factory.CreateReminder(context);
+        await _reminders.AddAsync(reminder, cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        _logger.LogInformation(
+            "Generado recordatorio de cita {AppointmentId} para el paciente {PatientId}.",
+            @event.AppointmentId, @event.PatientId);
+    }
+
+    /// <summary>Genera una alerta inmediata de stock bajo (US07).</summary>
+    public async Task HandleStockBajoAsync(StockBajoEvent @event, CancellationToken cancellationToken = default)
+    {
+        var alert = Reminder.CreateAlert(
+            @event.PatientId,
+            ReminderEntityType.Medication,
+            @event.MedicationId,
+            _clock.UtcNow,
+            "Stock bajo de medicamento",
+            $"Te quedan {@event.RemainingUnits} unidades de {@event.MedicationName}. Recuerda reabastecerte.");
+
+        await _reminders.AddAsync(alert, cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        _logger.LogInformation(
+            "Generada alerta de stock bajo del medicamento {MedicationId} para el paciente {PatientId}.",
+            @event.MedicationId, @event.PatientId);
+    }
+
+    /// <summary>Cancela los recordatorios pendientes de la entidad cumplida (US06, patrón Observer).</summary>
+    public async Task HandleCumplimientoRegistradoAsync(CumplimientoRegistradoEvent @event, CancellationToken cancellationToken = default)
+    {
+        var pending = await _reminders.GetScheduledByEntityAsync(
+            @event.PatientId, @event.EntityType, @event.EntityId, cancellationToken);
+
+        if (pending.Count == 0)
+        {
+            _logger.LogDebug(
+                "Sin recordatorios pendientes que cancelar para {EntityType} {EntityId} (paciente {PatientId}).",
+                @event.EntityType, @event.EntityId, @event.PatientId);
+            return;
+        }
+
+        foreach (var reminder in pending)
+        {
+            reminder.Cancel(_clock.UtcNow);
+            _reminders.Update(reminder);
+        }
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        _logger.LogInformation(
+            "Cancelados {Count} recordatorios tras cumplimiento de {EntityType} {EntityId}.",
+            pending.Count, @event.EntityType, @event.EntityId);
+    }
+
+    /// <summary>Lista los recordatorios activos del paciente (GET /reminders/patients/{patientId}).</summary>
+    public async Task<IReadOnlyList<ReminderDto>> GetActiveByPatientAsync(long patientId, CancellationToken cancellationToken = default)
+    {
+        var reminders = await _reminders.GetActiveByPatientAsync(patientId, cancellationToken);
+        return reminders.Select(ReminderDto.FromEntity).ToList();
+    }
+
+    /// <summary>Cancela un recordatorio por id (PUT /reminders/{id}/cancel). Devuelve false si no existe.</summary>
+    public async Task<bool> CancelReminderAsync(long reminderId, CancellationToken cancellationToken = default)
+    {
+        var reminder = await _reminders.GetByIdAsync(reminderId, cancellationToken);
+        if (reminder is null)
+            return false;
+
+        reminder.Cancel(_clock.UtcNow);
+        _reminders.Update(reminder);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        _logger.LogInformation("Recordatorio {ReminderId} cancelado por solicitud.", reminderId);
+        return true;
+    }
+}
+=== ./src/MediTrack.ReminderService.Domain/Entities/NotificationLog.cs ===
+using MediTrack.ReminderService.Domain.Enums;
+
+namespace MediTrack.ReminderService.Domain.Entities;
+
+/// <summary>
+/// Bitácora de cada intento de entrega de notificación. Permite auditar el
+/// cumplimiento del QAS-2 (99.9 % de recordatorios críticos entregados) y el uso
+/// de canales de fallback. Mapea a la tabla <c>notification_log</c>.
+/// </summary>
+public class NotificationLog
+{
+    private NotificationLog() { }
+
+    public long Id { get; private set; }
+
+    public long ReminderId { get; private set; }
+
+    public DateTime SentAt { get; private set; }
+
+    public NotificationChannel Channel { get; private set; }
+
+    public DeliveryStatus DeliveryStatus { get; private set; }
+
+    internal static NotificationLog Create(
+        NotificationChannel channel,
+        DeliveryStatus deliveryStatus,
+        DateTime sentAtUtc) => new()
+        {
+            Channel = channel,
+            DeliveryStatus = deliveryStatus,
+            SentAt = sentAtUtc
+        };
+}
+=== ./src/MediTrack.ReminderService.Domain/Entities/NotificationPreference.cs ===
+namespace MediTrack.ReminderService.Domain.Entities;
+
+/// <summary>
+/// Preferencias de notificación por paciente (US22). El Reminder Service las
+/// consulta antes de generar cada notificación para respetar sonido, vibración,
+/// número de repeticiones y la desactivación temporal global. Mapea a
+/// <c>notification_preference</c>.
+/// </summary>
+public class NotificationPreference
+{
+    private NotificationPreference() { }
+
+    public long Id { get; private set; }
+
+    public long PatientId { get; private set; }
+
+    public bool SoundEnabled { get; private set; }
+
+    public bool VibrationEnabled { get; private set; }
+
+    /// <summary>Cantidad de repeticiones de la notificación (mín. 1).</summary>
+    public int RepeatCount { get; private set; }
+
+    /// <summary>Interruptor maestro: si está en false, no se envía ningún recordatorio.</summary>
+    public bool GlobalEnabled { get; private set; }
+
+    /// <summary>Preferencia por defecto para un paciente sin configuración explícita.</summary>
+    public static NotificationPreference Default(long patientId) => new()
+    {
+        PatientId = patientId,
+        SoundEnabled = true,
+        VibrationEnabled = true,
+        RepeatCount = 1,
+        GlobalEnabled = true
+    };
+
+    public void Update(bool soundEnabled, bool vibrationEnabled, int repeatCount, bool globalEnabled)
+    {
+        if (repeatCount < 1)
+            throw new ArgumentOutOfRangeException(nameof(repeatCount), "Las repeticiones deben ser al menos 1.");
+
+        SoundEnabled = soundEnabled;
+        VibrationEnabled = vibrationEnabled;
+        RepeatCount = repeatCount;
+        GlobalEnabled = globalEnabled;
+    }
+}
+=== ./src/MediTrack.ReminderService.Domain/Entities/Reminder.cs ===
+using MediTrack.ReminderService.Domain.Enums;
+
+namespace MediTrack.ReminderService.Domain.Entities;
+
+/// <summary>
+/// Raíz de agregado del Reminder Service. Representa un recordatorio programado
+/// para un paciente, derivado de un evento clínico (RecetaCargada, CitaAgendada,
+/// etc.). Encapsula su ciclo de vida: programación, marca de envío y cancelación.
+///
+/// Las invariantes viven dentro de la entidad (modelo de dominio rico): el resto
+/// del sistema no muta su estado directamente, sino a través de los métodos de
+/// comportamiento. Ver "Reminder Domain Model" en el diagrama de componentes (Fig. 17).
+/// </summary>
+public class Reminder
+{
+    private readonly List<NotificationLog> _notificationLogs = new();
+
+    // Constructor privado: la creación se realiza vía Factory Method (ver Factories/).
+    private Reminder() { }
+
+    public long Id { get; private set; }
+
+    public long PatientId { get; private set; }
+
+    /// <summary>Tipo de entidad que originó el recordatorio (medication/appointment/exam).</summary>
+    public ReminderEntityType EntityType { get; private set; }
+
+    /// <summary>Identificador de la entidad origen en su microservicio (FK lógica, no física).</summary>
+    public long EntityId { get; private set; }
+
+    /// <summary>Instante en que el recordatorio debe dispararse.</summary>
+    public DateTime ScheduledAt { get; private set; }
+
+    public ReminderStatus Status { get; private set; }
+
+    public DateTime? CancelledAt { get; private set; }
+
+    /// <summary>Título de la notificación, construido por la fábrica especializada.</summary>
+    public string Title { get; private set; } = string.Empty;
+
+    /// <summary>Cuerpo de la notificación, construido por la fábrica especializada.</summary>
+    public string Body { get; private set; } = string.Empty;
+
+    public IReadOnlyCollection<NotificationLog> NotificationLogs => _notificationLogs.AsReadOnly();
+
+    /// <summary>
+    /// Fábrica interna usada exclusivamente por las clases Factory del dominio.
+    /// Mantiene el constructor cerrado y centraliza la validación de invariantes.
+    /// </summary>
+    internal static Reminder Schedule(
+        long patientId,
+        ReminderEntityType entityType,
+        long entityId,
+        DateTime scheduledAt,
+        string title,
+        string body)
+    {
+        if (patientId <= 0)
+            throw new ArgumentException("El paciente del recordatorio es obligatorio.", nameof(patientId));
+        if (entityId <= 0)
+            throw new ArgumentException("La entidad origen del recordatorio es obligatoria.", nameof(entityId));
+        if (string.IsNullOrWhiteSpace(title))
+            throw new ArgumentException("El recordatorio requiere un título.", nameof(title));
+
+        return new Reminder
+        {
+            PatientId = patientId,
+            EntityType = entityType,
+            EntityId = entityId,
+            ScheduledAt = scheduledAt,
+            Title = title.Trim(),
+            Body = (body ?? string.Empty).Trim(),
+            Status = ReminderStatus.Scheduled
+        };
+    }
+
+    /// <summary>
+    /// Crea una alerta inmediata no derivada del flujo de fábricas programadas
+    /// (p. ej. alerta de stock bajo, US07). El mensaje ya viene redactado por la
+    /// capa de aplicación; se programa para envío inmediato.
+    /// </summary>
+    public static Reminder CreateAlert(
+        long patientId,
+        ReminderEntityType entityType,
+        long entityId,
+        DateTime whenUtc,
+        string title,
+        string body) => Schedule(patientId, entityType, entityId, whenUtc, title, body);
+
+    /// <summary>Indica si el recordatorio ya venció y sigue pendiente de envío.</summary>
+    public bool IsDue(DateTime asOfUtc) =>
+        Status == ReminderStatus.Scheduled && ScheduledAt <= asOfUtc;
+
+    /// <summary>
+    /// Registra un intento de entrega. El recordatorio pasa a Sent si algún canal
+    /// confirma la entrega; permanece Scheduled mientras haya reintentos pendientes.
+    /// </summary>
+    public NotificationLog RegisterDeliveryAttempt(
+        NotificationChannel channel,
+        DeliveryStatus deliveryStatus,
+        DateTime attemptedAtUtc)
+    {
+        var log = NotificationLog.Create(channel, deliveryStatus, attemptedAtUtc);
+        _notificationLogs.Add(log);
+
+        if (deliveryStatus == DeliveryStatus.Delivered)
+            Status = ReminderStatus.Sent;
+
+        return log;
+    }
+
+    /// <summary>Marca el recordatorio como fallido tras agotar los reintentos.</summary>
+    public void MarkAsFailed()
+    {
+        if (Status == ReminderStatus.Scheduled)
+            Status = ReminderStatus.Failed;
+    }
+
+    /// <summary>
+    /// Cancela el recordatorio. Operación idempotente: cancelar uno ya cancelado
+    /// o ya enviado no produce error. Usado al recibir CumplimientoRegistrado (US06).
+    /// </summary>
+    public void Cancel(DateTime cancelledAtUtc)
+    {
+        if (Status is ReminderStatus.Cancelled or ReminderStatus.Sent)
+            return;
+
+        Status = ReminderStatus.Cancelled;
+        CancelledAt = cancelledAtUtc;
+    }
+}
+=== ./src/MediTrack.ReminderService.Domain/Enums/DeliveryStatus.cs ===
+namespace MediTrack.ReminderService.Domain.Enums;
+
+/// <summary>
+/// Resultado de un intento de entrega registrado en el NotificationLog.
+/// </summary>
+public enum DeliveryStatus
+{
+    Pending = 0,
+    Delivered = 1,
+    Failed = 2
+}
+=== ./src/MediTrack.ReminderService.Domain/Enums/NotificationChannel.cs ===
+namespace MediTrack.ReminderService.Domain.Enums;
+
+/// <summary>
+/// Canal por el que se intenta entregar la notificación. Push es el canal
+/// primario (FCM, CON-05); Sms y Local son canales de fallback (AC-09).
+/// </summary>
+public enum NotificationChannel
+{
+    Push = 0,
+    Sms = 1,
+    Local = 2
+}
+=== ./src/MediTrack.ReminderService.Domain/Enums/ReminderEntityType.cs ===
+namespace MediTrack.ReminderService.Domain.Enums;
+
+/// <summary>
+/// Tipo de entidad clínica que origina un recordatorio. Determina qué fábrica
+/// (Factory Method) construye el recordatorio. Ver sección 4.1.6 del informe.
+/// </summary>
+public enum ReminderEntityType
+{
+    Medication = 0,
+    Appointment = 1,
+    Exam = 2
+}
+=== ./src/MediTrack.ReminderService.Domain/Enums/ReminderStatus.cs ===
+namespace MediTrack.ReminderService.Domain.Enums;
+
+/// <summary>
+/// Estados del ciclo de vida de un recordatorio.
+/// </summary>
+public enum ReminderStatus
+{
+    /// <summary>Programado y pendiente de envío.</summary>
+    Scheduled = 0,
+
+    /// <summary>Entregado correctamente al menos por un canal.</summary>
+    Sent = 1,
+
+    /// <summary>Cancelado (p. ej. tras CumplimientoRegistrado).</summary>
+    Cancelled = 2,
+
+    /// <summary>Agotados los reintentos sin entrega confirmada.</summary>
+    Failed = 3
+}
+=== ./src/MediTrack.ReminderService.Domain/Factories/AppointmentReminderFactory.cs ===
+using MediTrack.ReminderService.Domain.Enums;
+
+namespace MediTrack.ReminderService.Domain.Factories;
+
+/// <summary>
+/// Fábrica concreta para recordatorios de citas médicas (US09). Avisa con 24 horas
+/// de anticipación e incluye el tipo de cita y, si está disponible, la ubicación.
+/// </summary>
+public sealed class AppointmentReminderFactory : ReminderFactory
+{
+    public override ReminderEntityType EntityType => ReminderEntityType.Appointment;
+
+    // La cita se recuerda con un día de anticipación.
+    protected override TimeSpan LeadTime => TimeSpan.FromHours(24);
+
+    protected override string BuildTitle(ReminderCreationContext context) =>
+        "Recordatorio de cita médica";
+
+    protected override string BuildBody(ReminderCreationContext context) =>
+        string.IsNullOrWhiteSpace(context.Detail)
+            ? $"Mañana tienes tu cita: {context.Subject}."
+            : $"Mañana tienes tu cita: {context.Subject} en {context.Detail}.";
+}
+=== ./src/MediTrack.ReminderService.Domain/Factories/ExamReminderFactory.cs ===
+using MediTrack.ReminderService.Domain.Enums;
+
+namespace MediTrack.ReminderService.Domain.Factories;
+
+/// <summary>
+/// Fábrica concreta para recordatorios de exámenes clínicos (US12). Avisa con 2 horas
+/// de anticipación a la fecha de recojo de resultados, indicando el tipo de examen.
+/// </summary>
+public sealed class ExamReminderFactory : ReminderFactory
+{
+    public override ReminderEntityType EntityType => ReminderEntityType.Exam;
+
+    // El recojo del examen se recuerda con un par de horas de anticipación.
+    protected override TimeSpan LeadTime => TimeSpan.FromHours(2);
+
+    protected override string BuildTitle(ReminderCreationContext context) =>
+        "Recordatorio de examen clínico";
+
+    protected override string BuildBody(ReminderCreationContext context) =>
+        $"Tienes pendiente tu examen: {context.Subject}. No olvides recoger tus resultados.";
+}
+=== ./src/MediTrack.ReminderService.Domain/Factories/IReminderFactoryProvider.cs ===
+using MediTrack.ReminderService.Domain.Enums;
+
+namespace MediTrack.ReminderService.Domain.Factories;
+
+/// <summary>
+/// Selector de fábricas: dado un <see cref="ReminderEntityType"/> devuelve la
+/// fábrica especializada correspondiente. Implementa la frase del informe
+/// "Dependiendo del tipo de entidad se instancia una fábrica especializada".
+/// </summary>
+public interface IReminderFactoryProvider
+{
+    ReminderFactory For(ReminderEntityType entityType);
+}
+=== ./src/MediTrack.ReminderService.Domain/Factories/MedicationReminderFactory.cs ===
+using MediTrack.ReminderService.Domain.Enums;
+
+namespace MediTrack.ReminderService.Domain.Factories;
+
+/// <summary>
+/// Fábrica concreta para recordatorios de medicación (US05). El aviso se dispara
+/// justo en la hora de la dosis (sin anticipación) e indica el medicamento y la dosis.
+/// </summary>
+public sealed class MedicationReminderFactory : ReminderFactory
+{
+    public override ReminderEntityType EntityType => ReminderEntityType.Medication;
+
+    // La dosis se recuerda en el momento exacto de la toma.
+    protected override TimeSpan LeadTime => TimeSpan.Zero;
+
+    protected override string BuildTitle(ReminderCreationContext context) =>
+        "Hora de tu medicamento";
+
+    protected override string BuildBody(ReminderCreationContext context) =>
+        string.IsNullOrWhiteSpace(context.Detail)
+            ? $"Es momento de tomar {context.Subject}."
+            : $"Es momento de tomar {context.Subject} ({context.Detail}).";
+}
+=== ./src/MediTrack.ReminderService.Domain/Factories/ReminderCreationContext.cs ===
+namespace MediTrack.ReminderService.Domain.Factories;
+
+/// <summary>
+/// Datos de entrada para construir un recordatorio, extraídos del evento de
+/// integración que lo origina (RecetaCargada, CitaAgendada, etc.). Es un objeto
+/// inmutable que desacopla las fábricas del transporte de mensajería.
+/// </summary>
+/// <param name="PatientId">Paciente destinatario.</param>
+/// <param name="EntityId">Id de la entidad origen en su microservicio.</param>
+/// <param name="EventTimeUtc">Instante clínico de referencia (hora de dosis, de la cita o de recojo del examen).</param>
+/// <param name="Subject">Texto descriptivo principal (nombre del medicamento, tipo de cita o examen).</param>
+/// <param name="Detail">Detalle opcional (dosis, ubicación, indicaciones).</param>
+public sealed record ReminderCreationContext(
+    long PatientId,
+    long EntityId,
+    DateTime EventTimeUtc,
+    string Subject,
+    string? Detail = null);
+=== ./src/MediTrack.ReminderService.Domain/Factories/ReminderFactory.cs ===
+using MediTrack.ReminderService.Domain.Entities;
+using MediTrack.ReminderService.Domain.Enums;
+
+namespace MediTrack.ReminderService.Domain.Factories;
+
+/// <summary>
+/// Creador abstracto del patrón Factory Method (sección 4.1.6 del informe).
+///
+/// Define el método fábrica <see cref="CreateReminder"/> como plantilla común y
+/// delega en las subclases la decisión de QUÉ tiempo de anticipación aplicar y
+/// CÓMO redactar el mensaje. Esto elimina condicionales por tipo y permite
+/// incorporar nuevos tipos de recordatorio sin modificar el código existente
+/// (principio Open/Closed).
+/// </summary>
+public abstract class ReminderFactory
+{
+    /// <summary>Tipo de entidad que esta fábrica sabe construir.</summary>
+    public abstract ReminderEntityType EntityType { get; }
+
+    /// <summary>
+    /// Tiempo de anticipación con el que se programa el recordatorio respecto al
+    /// instante clínico. Cada fábrica define el suyo (p. ej. la cita avisa 24 h antes).
+    /// </summary>
+    protected abstract TimeSpan LeadTime { get; }
+
+    /// <summary>Construye el título de la notificación para este tipo.</summary>
+    protected abstract string BuildTitle(ReminderCreationContext context);
+
+    /// <summary>Construye el cuerpo de la notificación para este tipo.</summary>
+    protected abstract string BuildBody(ReminderCreationContext context);
+
+    /// <summary>
+    /// Método fábrica: produce un <see cref="Reminder"/> consistente aplicando la
+    /// anticipación y el mensaje propios del tipo. Plantilla estable, partes variables
+    /// resueltas por la subclase.
+    /// </summary>
+    public Reminder CreateReminder(ReminderCreationContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        var scheduledAt = context.EventTimeUtc - LeadTime;
+        return Reminder.Schedule(
+            context.PatientId,
+            EntityType,
+            context.EntityId,
+            scheduledAt,
+            BuildTitle(context),
+            BuildBody(context));
+    }
+}
+=== ./src/MediTrack.ReminderService.Domain/Factories/ReminderFactoryProvider.cs ===
+using MediTrack.ReminderService.Domain.Enums;
+
+namespace MediTrack.ReminderService.Domain.Factories;
+
+/// <summary>
+/// Implementación por defecto del selector de fábricas. Indexa las fábricas
+/// disponibles por su <see cref="ReminderFactory.EntityType"/>, de modo que añadir
+/// un nuevo tipo solo requiere registrar una nueva fábrica (Open/Closed).
+/// </summary>
+public sealed class ReminderFactoryProvider : IReminderFactoryProvider
+{
+    private readonly IReadOnlyDictionary<ReminderEntityType, ReminderFactory> _factories;
+
+    public ReminderFactoryProvider(IEnumerable<ReminderFactory> factories)
+    {
+        ArgumentNullException.ThrowIfNull(factories);
+        _factories = factories.ToDictionary(f => f.EntityType);
+    }
+
+    public ReminderFactory For(ReminderEntityType entityType)
+    {
+        if (_factories.TryGetValue(entityType, out var factory))
+            return factory;
+
+        throw new NotSupportedException(
+            $"No existe una fábrica de recordatorios para el tipo '{entityType}'.");
+    }
+}
+=== ./src/MediTrack.ReminderService.Domain/obj/Debug/net8.0/.NETCoreApp,Version=v8.0.AssemblyAttributes.cs ===
+// <autogenerated />
+using System;
+using System.Reflection;
+[assembly: global::System.Runtime.Versioning.TargetFrameworkAttribute(".NETCoreApp,Version=v8.0", FrameworkDisplayName = ".NET 8.0")]
+=== ./src/MediTrack.ReminderService.Domain/obj/Debug/net8.0/MediTrack.ReminderService.Domain.AssemblyInfo.cs ===
+//------------------------------------------------------------------------------
+// <auto-generated>
+//     This code was generated by a tool.
+//
+//     Changes to this file may cause incorrect behavior and will be lost if
+//     the code is regenerated.
+// </auto-generated>
+//------------------------------------------------------------------------------
+
+using System;
+using System.Reflection;
+
+[assembly: System.Reflection.AssemblyCompanyAttribute("MediTrack.ReminderService.Domain")]
+[assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
+[assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+d00ea168358d2a6bb2dc22f82c5896a73e385389")]
+[assembly: System.Reflection.AssemblyProductAttribute("MediTrack.ReminderService.Domain")]
+[assembly: System.Reflection.AssemblyTitleAttribute("MediTrack.ReminderService.Domain")]
+[assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
+
+// Generado por la clase WriteCodeFragment de MSBuild.
+
+=== ./src/MediTrack.ReminderService.Domain/obj/Debug/net8.0/MediTrack.ReminderService.Domain.GlobalUsings.g.cs ===
+// <auto-generated/>
+global using global::System;
+global using global::System.Collections.Generic;
+global using global::System.IO;
+global using global::System.Linq;
+global using global::System.Net.Http;
+global using global::System.Threading;
+global using global::System.Threading.Tasks;
+=== ./src/MediTrack.ReminderService.Domain/Repositories/INotificationPreferenceRepository.cs ===
+using MediTrack.ReminderService.Domain.Entities;
+
+namespace MediTrack.ReminderService.Domain.Repositories;
+
+/// <summary>
+/// Puerto de persistencia para las preferencias de notificación por paciente (US22).
+/// </summary>
+public interface INotificationPreferenceRepository
+{
+    Task<NotificationPreference?> GetByPatientAsync(long patientId, CancellationToken cancellationToken = default);
+
+    Task AddAsync(NotificationPreference preference, CancellationToken cancellationToken = default);
+
+    void Update(NotificationPreference preference);
+}
+=== ./src/MediTrack.ReminderService.Domain/Repositories/IReminderRepository.cs ===
+using MediTrack.ReminderService.Domain.Entities;
+using MediTrack.ReminderService.Domain.Enums;
+
+namespace MediTrack.ReminderService.Domain.Repositories;
+
+/// <summary>
+/// Puerto de persistencia para el agregado Reminder (patrón Repository, 4.1.6).
+/// Abstrae el acceso a MySQL detrás de una interfaz limpia y testeable.
+/// </summary>
+public interface IReminderRepository
+{
+    Task AddAsync(Reminder reminder, CancellationToken cancellationToken = default);
+
+    Task<Reminder?> GetByIdAsync(long id, CancellationToken cancellationToken = default);
+
+    /// <summary>Recordatorios activos (programados) de un paciente para GET /reminders/patients/{id}.</summary>
+    Task<IReadOnlyList<Reminder>> GetActiveByPatientAsync(long patientId, CancellationToken cancellationToken = default);
+
+    /// <summary>Recordatorios vencidos pendientes de envío, usados por el Scheduler.</summary>
+    Task<IReadOnlyList<Reminder>> GetDueAsync(DateTime asOfUtc, int batchSize, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Recordatorios programados que apuntan a una entidad concreta. Usado para
+    /// cancelar al recibir CumplimientoRegistrado / cita cancelada.
+    /// </summary>
+    Task<IReadOnlyList<Reminder>> GetScheduledByEntityAsync(
+        long patientId, ReminderEntityType entityType, long entityId, CancellationToken cancellationToken = default);
+
+    void Update(Reminder reminder);
+}
+=== ./src/MediTrack.ReminderService.Domain/Repositories/IUnitOfWork.cs ===
+namespace MediTrack.ReminderService.Domain.Repositories;
+
+/// <summary>
+/// Unidad de trabajo: confirma de forma atómica los cambios del agregado junto con
+/// los mensajes del Outbox, garantizando consistencia local (patrón Outbox, AC-08).
+/// </summary>
+public interface IUnitOfWork
+{
+    Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
+}
+=== ./src/MediTrack.ReminderService.Infrastructure/DependencyInjection.cs ===
+using MediTrack.ReminderService.Application.Abstractions;
+using MediTrack.ReminderService.Domain.Repositories;
+using MediTrack.ReminderService.Infrastructure.Messaging;
+using MediTrack.ReminderService.Infrastructure.Notifications;
+using MediTrack.ReminderService.Infrastructure.Persistence;
+using MediTrack.ReminderService.Infrastructure.Persistence.Repositories;
+using MediTrack.ReminderService.Infrastructure.Scheduling;
+using MediTrack.ReminderService.Infrastructure.Time;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace MediTrack.ReminderService.Infrastructure;
+
+/// <summary>
+/// Registro de la capa de infraestructura: persistencia (EF Core + MySQL bajo
+/// Database per Service), repositorios, mensajería RabbitMQ con Outbox/Inbox, el
+/// adaptador de FCM y los servicios en segundo plano (Scheduler, Consumer, Outbox).
+/// </summary>
+public static class DependencyInjection
+{
+    public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
+    {
+        AddPersistence(services, configuration);
+        AddMessaging(services, configuration);
+        AddNotifications(services, configuration);
+        AddBackgroundServices(services, configuration);
+
+        services.AddSingleton<IClock, SystemClock>();
+        services.AddSingleton<IDelayProvider, TaskDelayProvider>();
+
+        return services;
+    }
+
+    private static void AddPersistence(IServiceCollection services, IConfiguration configuration)
+    {
+        var connectionString = configuration.GetConnectionString("ReminderDb")
+            ?? throw new InvalidOperationException("Falta la cadena de conexión 'ReminderDb'.");
+
+        // Patrón Singleton (4.1.6): un único punto de acceso a la cadena del pool.
+        services.AddSingleton(new DatabaseConnectionPool(connectionString));
+
+        var serverVersion = new MySqlServerVersion(new Version(8, 0, 36));
+        services.AddDbContextPool<ReminderDbContext>(options =>
+            options.UseMySql(connectionString, serverVersion, mySql =>
+            {
+                mySql.EnableRetryOnFailure(maxRetryCount: 5, maxRetryDelay: TimeSpan.FromSeconds(10), errorNumbersToAdd: null);
+                mySql.MigrationsAssembly(typeof(ReminderDbContext).Assembly.FullName);
+            }));
+
+        services.AddScoped<IReminderRepository, ReminderRepository>();
+        services.AddScoped<INotificationPreferenceRepository, NotificationPreferenceRepository>();
+        services.AddScoped<IUnitOfWork>(sp => sp.GetRequiredService<ReminderDbContext>());
+    }
+
+    private static void AddMessaging(IServiceCollection services, IConfiguration configuration)
+    {
+        services.Configure<RabbitMqOptions>(configuration.GetSection(RabbitMqOptions.SectionName));
+        services.AddSingleton<IntegrationEventSerializer>();
+        services.AddSingleton<RabbitMqConnection>();
+        services.AddScoped<IIntegrationEventPublisher, OutboxIntegrationEventPublisher>();
+    }
+
+    private static void AddNotifications(IServiceCollection services, IConfiguration configuration)
+    {
+        services.Configure<FcmOptions>(configuration.GetSection(FcmOptions.SectionName));
+        services.AddSingleton<INotificationSender, FcmNotificationSender>();
+    }
+
+    private static void AddBackgroundServices(IServiceCollection services, IConfiguration configuration)
+    {
+        services.Configure<SchedulerOptions>(configuration.GetSection(SchedulerOptions.SectionName));
+        services.AddHostedService<RabbitMqEventConsumerHostedService>();
+        services.AddHostedService<OutboxDispatcherHostedService>();
+        services.AddHostedService<ReminderSchedulerHostedService>();
+    }
+}
+=== ./src/MediTrack.ReminderService.Infrastructure/Messaging/IntegrationEventSerializer.cs ===
+using System.Text.Json;
+using MediTrack.ReminderService.Application.IntegrationEvents;
+
+namespace MediTrack.ReminderService.Infrastructure.Messaging;
+
+/// <summary>
+/// Serializa y deserializa eventos de integración entre objeto y JSON. Mantiene un
+/// registro <c>EventType → Type</c> para reconstruir el tipo concreto a partir del
+/// routing key recibido desde RabbitMQ.
+/// </summary>
+public sealed class IntegrationEventSerializer
+{
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    private static readonly IReadOnlyDictionary<string, Type> InboundTypes = new Dictionary<string, Type>
+    {
+        ["RecetaCargada"] = typeof(RecetaCargadaEvent),
+        ["CitaAgendada"] = typeof(CitaAgendadaEvent),
+        ["CumplimientoRegistrado"] = typeof(CumplimientoRegistradoEvent),
+        ["StockBajo"] = typeof(StockBajoEvent)
+    };
+
+    public string Serialize(IntegrationEvent integrationEvent) =>
+        JsonSerializer.Serialize(integrationEvent, integrationEvent.GetType(), JsonOptions);
+
+    public bool TryResolveType(string eventType, out Type type) =>
+        InboundTypes.TryGetValue(eventType, out type!);
+
+    public IntegrationEvent? Deserialize(string eventType, string payload)
+    {
+        if (!TryResolveType(eventType, out var type))
+            return null;
+
+        return (IntegrationEvent?)JsonSerializer.Deserialize(payload, type, JsonOptions);
+    }
+}
+=== ./src/MediTrack.ReminderService.Infrastructure/Messaging/OutboxDispatcherHostedService.cs ===
+using System.Text;
+using MediTrack.ReminderService.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using RabbitMQ.Client;
+
+namespace MediTrack.ReminderService.Infrastructure.Messaging;
+
+/// <summary>
+/// Publicador del Outbox: lee periódicamente los mensajes pendientes y los entrega a
+/// RabbitMQ usando el <c>EventType</c> como routing key. Marca cada mensaje como
+/// procesado solo tras confirmar la publicación, garantizando entrega "al menos una
+/// vez" (los consumidores son idempotentes vía Inbox).
+/// </summary>
+public sealed class OutboxDispatcherHostedService : BackgroundService
+{
+    private const int BatchSize = 50;
+
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly RabbitMqConnection _connection;
+    private readonly RabbitMqOptions _options;
+    private readonly ILogger<OutboxDispatcherHostedService> _logger;
+
+    public OutboxDispatcherHostedService(
+        IServiceScopeFactory scopeFactory,
+        RabbitMqConnection connection,
+        IOptions<RabbitMqOptions> options,
+        ILogger<OutboxDispatcherHostedService> logger)
+    {
+        _scopeFactory = scopeFactory;
+        _connection = connection;
+        _options = options.Value;
+        _logger = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        var period = TimeSpan.FromSeconds(Math.Max(1, _options.OutboxPollingSeconds));
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                await DispatchPendingAsync(stoppingToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogError(ex, "Error en el ciclo del publicador de Outbox.");
+            }
+
+            await Task.Delay(period, stoppingToken);
+        }
+    }
+
+    private async Task DispatchPendingAsync(CancellationToken cancellationToken)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var context = scope.ServiceProvider.GetRequiredService<ReminderDbContext>();
+
+        var pending = await context.OutboxMessages
+            .Where(m => m.ProcessedAtUtc == null)
+            .OrderBy(m => m.OccurredAtUtc)
+            .Take(BatchSize)
+            .ToListAsync(cancellationToken);
+
+        if (pending.Count == 0)
+            return;
+
+        using var channel = _connection.CreateConfiguredChannel();
+
+        foreach (var message in pending)
+        {
+            try
+            {
+                var body = Encoding.UTF8.GetBytes(message.Payload);
+                var properties = channel.CreateBasicProperties();
+                properties.Persistent = true;
+                properties.MessageId = message.Id.ToString();
+                properties.Type = message.EventType;
+                properties.ContentType = "application/json";
+                if (!string.IsNullOrEmpty(message.CorrelationId))
+                    properties.CorrelationId = message.CorrelationId;
+
+                channel.BasicPublish(_options.ExchangeName, message.EventType, properties, body);
+                message.ProcessedAtUtc = DateTime.UtcNow;
+            }
+            catch (Exception ex)
+            {
+                message.Attempts++;
+                message.LastError = ex.Message;
+                _logger.LogError(ex, "No se pudo publicar el mensaje de Outbox {MessageId}.", message.Id);
+            }
+        }
+
+        await context.SaveChangesAsync(cancellationToken);
+        _logger.LogInformation("Publicados {Count} mensajes del Outbox.", pending.Count(m => m.ProcessedAtUtc != null));
+    }
+}
+=== ./src/MediTrack.ReminderService.Infrastructure/Messaging/OutboxIntegrationEventPublisher.cs ===
+using MediTrack.ReminderService.Application.Abstractions;
+using MediTrack.ReminderService.Application.IntegrationEvents;
+using MediTrack.ReminderService.Infrastructure.Persistence;
+
+namespace MediTrack.ReminderService.Infrastructure.Messaging;
+
+/// <summary>
+/// Implementación del puerto de publicación basada en el patrón Outbox (AC-08). En
+/// lugar de publicar directamente a RabbitMQ, persiste el evento como
+/// <see cref="OutboxMessage"/> en el MISMO DbContext que el cambio de dominio, de
+/// modo que ambos se confirman en una única transacción local. El
+/// <see cref="OutboxDispatcherHostedService"/> lo entrega luego al broker.
+/// </summary>
+public sealed class OutboxIntegrationEventPublisher : IIntegrationEventPublisher
+{
+    private readonly ReminderDbContext _context;
+    private readonly IntegrationEventSerializer _serializer;
+
+    public OutboxIntegrationEventPublisher(ReminderDbContext context, IntegrationEventSerializer serializer)
+    {
+        _context = context;
+        _serializer = serializer;
+    }
+
+    public async Task EnqueueAsync(IntegrationEvent integrationEvent, CancellationToken cancellationToken = default)
+    {
+        var message = new OutboxMessage
+        {
+            Id = integrationEvent.EventId,
+            EventType = integrationEvent.EventType,
+            Payload = _serializer.Serialize(integrationEvent),
+            CorrelationId = integrationEvent.CorrelationId,
+            OccurredAtUtc = integrationEvent.OccurredAtUtc,
+            Attempts = 0
+        };
+
+        await _context.OutboxMessages.AddAsync(message, cancellationToken);
+        // No se llama SaveChanges aquí: lo confirma la UnitOfWork del caso de uso.
+    }
+}
+=== ./src/MediTrack.ReminderService.Infrastructure/Messaging/RabbitMqConnection.cs ===
+using RabbitMQ.Client;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
+namespace MediTrack.ReminderService.Infrastructure.Messaging;
+
+/// <summary>
+/// Gestiona una conexión perezosa y reutilizable a RabbitMQ (Singleton). Declara la
+/// topología (exchange topic + cola del servicio con sus bindings) una sola vez.
+/// </summary>
+public sealed class RabbitMqConnection : IDisposable
+{
+    private static readonly string[] ConsumedRoutingKeys =
+    {
+        "RecetaCargada", "CitaAgendada", "CumplimientoRegistrado", "StockBajo"
+    };
+
+    private readonly RabbitMqOptions _options;
+    private readonly ILogger<RabbitMqConnection> _logger;
+    private readonly object _gate = new();
+    private IConnection? _connection;
+
+    public RabbitMqConnection(IOptions<RabbitMqOptions> options, ILogger<RabbitMqConnection> logger)
+    {
+        _options = options.Value;
+        _logger = logger;
+    }
+
+    public string ExchangeName => _options.ExchangeName;
+    public string QueueName => _options.QueueName;
+
+    public IConnection GetConnection()
+    {
+        if (_connection is { IsOpen: true })
+            return _connection;
+
+        lock (_gate)
+        {
+            if (_connection is { IsOpen: true })
+                return _connection;
+
+            var factory = new ConnectionFactory
+            {
+                HostName = _options.Host,
+                Port = _options.Port,
+                UserName = _options.UserName,
+                Password = _options.Password,
+                VirtualHost = _options.VirtualHost,
+                DispatchConsumersAsync = true,
+                AutomaticRecoveryEnabled = true
+            };
+
+            _connection = factory.CreateConnection("meditrack-reminder-service");
+            _logger.LogInformation("Conexión a RabbitMQ establecida en {Host}:{Port}.", _options.Host, _options.Port);
+            return _connection;
+        }
+    }
+
+    /// <summary>Crea un canal con la topología declarada (idempotente).</summary>
+    public IModel CreateConfiguredChannel()
+    {
+        var channel = GetConnection().CreateModel();
+        channel.ExchangeDeclare(_options.ExchangeName, ExchangeType.Topic, durable: true, autoDelete: false);
+        channel.QueueDeclare(_options.QueueName, durable: true, exclusive: false, autoDelete: false);
+
+        foreach (var routingKey in ConsumedRoutingKeys)
+            channel.QueueBind(_options.QueueName, _options.ExchangeName, routingKey);
+
+        return channel;
+    }
+
+    public void Dispose()
+    {
+        if (_connection is not null)
+        {
+            _connection.Dispose();
+            _connection = null;
+        }
+    }
+}
+=== ./src/MediTrack.ReminderService.Infrastructure/Messaging/RabbitMqEventConsumerHostedService.cs ===
+using System.Text;
+using MediTrack.ReminderService.Application.IntegrationEvents;
+using MediTrack.ReminderService.Application.Services;
+using MediTrack.ReminderService.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
+
+namespace MediTrack.ReminderService.Infrastructure.Messaging;
+
+/// <summary>
+/// "Event Consumer" (Fig. 17): consume los eventos del Message Bus y delega en el
+/// <see cref="ScheduleApplicationService"/>. Garantiza idempotencia con el Inbox
+/// (<see cref="ProcessedEvent"/>): un mensaje reentregado no se procesa dos veces.
+/// </summary>
+public sealed class RabbitMqEventConsumerHostedService : BackgroundService
+{
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly RabbitMqConnection _connection;
+    private readonly IntegrationEventSerializer _serializer;
+    private readonly ILogger<RabbitMqEventConsumerHostedService> _logger;
+    private IModel? _channel;
+
+    public RabbitMqEventConsumerHostedService(
+        IServiceScopeFactory scopeFactory,
+        RabbitMqConnection connection,
+        IntegrationEventSerializer serializer,
+        ILogger<RabbitMqEventConsumerHostedService> logger)
+    {
+        _scopeFactory = scopeFactory;
+        _connection = connection;
+        _serializer = serializer;
+        _logger = logger;
+    }
+
+    protected override Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        _channel = _connection.CreateConfiguredChannel();
+        _channel.BasicQos(prefetchSize: 0, prefetchCount: 10, global: false);
+
+        var consumer = new AsyncEventingBasicConsumer(_channel);
+        consumer.Received += OnReceivedAsync;
+        _channel.BasicConsume(_connection.QueueName, autoAck: false, consumer);
+
+        _logger.LogInformation("Event Consumer escuchando la cola {Queue}.", _connection.QueueName);
+        return Task.CompletedTask;
+    }
+
+    private async Task OnReceivedAsync(object sender, BasicDeliverEventArgs args)
+    {
+        var eventType = string.IsNullOrEmpty(args.BasicProperties.Type)
+            ? args.RoutingKey
+            : args.BasicProperties.Type;
+        var payload = Encoding.UTF8.GetString(args.Body.Span);
+
+        try
+        {
+            var integrationEvent = _serializer.Deserialize(eventType, payload);
+            if (integrationEvent is null)
+            {
+                _logger.LogWarning("Evento desconocido '{EventType}' descartado.", eventType);
+                _channel!.BasicNack(args.DeliveryTag, multiple: false, requeue: false);
+                return;
+            }
+
+            await ProcessAsync(integrationEvent);
+            _channel!.BasicAck(args.DeliveryTag, multiple: false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error procesando el evento '{EventType}'. Se reencolará.", eventType);
+            _channel!.BasicNack(args.DeliveryTag, multiple: false, requeue: true);
+        }
+    }
+
+    private async Task ProcessAsync(IntegrationEvent integrationEvent)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var context = scope.ServiceProvider.GetRequiredService<ReminderDbContext>();
+
+        // Inbox: si ya se procesó este EventId, no se vuelve a aplicar.
+        var alreadyProcessed = await context.ProcessedEvents
+            .AnyAsync(e => e.EventId == integrationEvent.EventId);
+        if (alreadyProcessed)
+        {
+            _logger.LogDebug("Evento {EventId} ya procesado; se omite.", integrationEvent.EventId);
+            return;
+        }
+
+        var schedule = scope.ServiceProvider.GetRequiredService<ScheduleApplicationService>();
+
+        switch (integrationEvent)
+        {
+            case RecetaCargadaEvent e:
+                await schedule.HandleRecetaCargadaAsync(e);
+                break;
+            case CitaAgendadaEvent e:
+                await schedule.HandleCitaAgendadaAsync(e);
+                break;
+            case CumplimientoRegistradoEvent e:
+                await schedule.HandleCumplimientoRegistradoAsync(e);
+                break;
+            case StockBajoEvent e:
+                await schedule.HandleStockBajoAsync(e);
+                break;
+            default:
+                _logger.LogWarning("Sin manejador para el evento {EventType}.", integrationEvent.EventType);
+                return;
+        }
+
+        context.ProcessedEvents.Add(new ProcessedEvent
+        {
+            EventId = integrationEvent.EventId,
+            EventType = integrationEvent.EventType,
+            ProcessedAtUtc = DateTime.UtcNow
+        });
+        await context.SaveChangesAsync();
+    }
+
+    public override void Dispose()
+    {
+        _channel?.Dispose();
+        base.Dispose();
+    }
+}
+=== ./src/MediTrack.ReminderService.Infrastructure/Messaging/RabbitMqOptions.cs ===
+namespace MediTrack.ReminderService.Infrastructure.Messaging;
+
+/// <summary>
+/// Configuración de la conexión y la topología de RabbitMQ (Message Bus, 5.4).
+/// </summary>
+public sealed class RabbitMqOptions
+{
+    public const string SectionName = "RabbitMq";
+
+    public string Host { get; set; } = "localhost";
+    public int Port { get; set; } = 5672;
+    public string UserName { get; set; } = "guest";
+    public string Password { get; set; } = "guest";
+    public string VirtualHost { get; set; } = "/";
+
+    /// <summary>Exchange de tipo topic compartido por todos los microservicios.</summary>
+    public string ExchangeName { get; set; } = "meditrack.events";
+
+    /// <summary>Cola propia del Reminder Service.</summary>
+    public string QueueName { get; set; } = "reminder-service.events";
+
+    /// <summary>Segundos entre ciclos del publicador de Outbox.</summary>
+    public int OutboxPollingSeconds { get; set; } = 10;
+}
+=== ./src/MediTrack.ReminderService.Infrastructure/Notifications/FcmNotificationSender.cs ===
+using FirebaseAdmin;
+using FirebaseAdmin.Messaging;
+using Google.Apis.Auth.OAuth2;
+using MediTrack.ReminderService.Application.Abstractions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
+namespace MediTrack.ReminderService.Infrastructure.Notifications;
+
+/// <summary>
+/// "Notification Adapter" (Fig. 17): puerto de salida hacia Firebase Cloud
+/// Messaging (CON-05). Envía la notificación a un topic por paciente. Si no hay
+/// credenciales configuradas, opera en modo simulado para no bloquear el desarrollo.
+/// </summary>
+public sealed class FcmNotificationSender : INotificationSender, IDisposable
+{
+    private readonly ILogger<FcmNotificationSender> _logger;
+    private readonly bool _simulate;
+    private readonly FirebaseApp? _firebaseApp;
+    private readonly FirebaseMessaging? _messaging;
+
+    public FcmNotificationSender(IOptions<FcmOptions> options, ILogger<FcmNotificationSender> logger)
+    {
+        _logger = logger;
+        var config = options.Value;
+
+        var hasCredentials = !string.IsNullOrWhiteSpace(config.CredentialsPath) && File.Exists(config.CredentialsPath);
+        _simulate = config.SimulateDelivery || !hasCredentials;
+
+        if (_simulate)
+        {
+            _logger.LogWarning(
+                "FcmNotificationSender en modo SIMULADO (sin credenciales válidas de FCM). No se envían notificaciones reales.");
+            return;
+        }
+
+        _firebaseApp = FirebaseApp.Create(new AppOptions
+        {
+            Credential = GoogleCredential.FromFile(config.CredentialsPath),
+            ProjectId = config.ProjectId
+        });
+        _messaging = FirebaseMessaging.GetMessaging(_firebaseApp);
+    }
+
+    public async Task<NotificationDeliveryResult> SendAsync(NotificationMessage message, CancellationToken cancellationToken = default)
+    {
+        if (_simulate || _messaging is null)
+        {
+            _logger.LogInformation(
+                "[SIMULADO] Push a topic {Topic}: \"{Title} — {Body}\".", message.Topic, message.Title, message.Body);
+            return NotificationDeliveryResult.Ok("simulated");
+        }
+
+        try
+        {
+            var fcmMessage = new Message
+            {
+                Topic = message.Topic,
+                Notification = new Notification { Title = message.Title, Body = message.Body },
+                Android = new AndroidConfig
+                {
+                    Priority = Priority.High,
+                    Notification = new AndroidNotification
+                    {
+                        DefaultSound = message.SoundEnabled,
+                        DefaultVibrateTimings = message.VibrationEnabled
+                    }
+                }
+            };
+
+            var providerMessageId = await _messaging.SendAsync(fcmMessage, cancellationToken);
+            return NotificationDeliveryResult.Ok(providerMessageId);
+        }
+        catch (FirebaseMessagingException ex)
+        {
+            _logger.LogError(ex, "Error de FCM al enviar al topic {Topic}.", message.Topic);
+            return NotificationDeliveryResult.Fail(ex.Message);
+        }
+    }
+
+    public void Dispose() => _firebaseApp?.Delete();
+}
+=== ./src/MediTrack.ReminderService.Infrastructure/Notifications/FcmOptions.cs ===
+namespace MediTrack.ReminderService.Infrastructure.Notifications;
+
+/// <summary>
+/// Configuración del adaptador de Firebase Cloud Messaging (CON-05). Si no se
+/// proporcionan credenciales, el adaptador opera en modo simulado (útil en
+/// desarrollo y pruebas, sin secretos en el código).
+/// </summary>
+public sealed class FcmOptions
+{
+    public const string SectionName = "Fcm";
+
+    /// <summary>Id del proyecto de Firebase.</summary>
+    public string? ProjectId { get; set; }
+
+    /// <summary>Ruta al archivo JSON de credenciales de la cuenta de servicio.</summary>
+    public string? CredentialsPath { get; set; }
+
+    /// <summary>
+    /// Fuerza el modo simulado aunque existan credenciales. Por defecto el modo se
+    /// decide según la presencia de credenciales.
+    /// </summary>
+    public bool SimulateDelivery { get; set; } = true;
+}
+=== ./src/MediTrack.ReminderService.Infrastructure/obj/Debug/net8.0/.NETCoreApp,Version=v8.0.AssemblyAttributes.cs ===
+// <autogenerated />
+using System;
+using System.Reflection;
+[assembly: global::System.Runtime.Versioning.TargetFrameworkAttribute(".NETCoreApp,Version=v8.0", FrameworkDisplayName = ".NET 8.0")]
+=== ./src/MediTrack.ReminderService.Infrastructure/obj/Debug/net8.0/MediTrack.ReminderService.Infrastructure.AssemblyInfo.cs ===
+//------------------------------------------------------------------------------
+// <auto-generated>
+//     This code was generated by a tool.
+//
+//     Changes to this file may cause incorrect behavior and will be lost if
+//     the code is regenerated.
+// </auto-generated>
+//------------------------------------------------------------------------------
+
+using System;
+using System.Reflection;
+
+[assembly: System.Reflection.AssemblyCompanyAttribute("MediTrack.ReminderService.Infrastructure")]
+[assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
+[assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+d00ea168358d2a6bb2dc22f82c5896a73e385389")]
+[assembly: System.Reflection.AssemblyProductAttribute("MediTrack.ReminderService.Infrastructure")]
+[assembly: System.Reflection.AssemblyTitleAttribute("MediTrack.ReminderService.Infrastructure")]
+[assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
+
+// Generado por la clase WriteCodeFragment de MSBuild.
+
+=== ./src/MediTrack.ReminderService.Infrastructure/obj/Debug/net8.0/MediTrack.ReminderService.Infrastructure.GlobalUsings.g.cs ===
+// <auto-generated/>
+global using global::System;
+global using global::System.Collections.Generic;
+global using global::System.IO;
+global using global::System.Linq;
+global using global::System.Net.Http;
+global using global::System.Threading;
+global using global::System.Threading.Tasks;
+=== ./src/MediTrack.ReminderService.Infrastructure/Persistence/Configurations/NotificationLogConfiguration.cs ===
+using MediTrack.ReminderService.Domain.Entities;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
+
+namespace MediTrack.ReminderService.Infrastructure.Persistence.Configurations;
+
+internal sealed class NotificationLogConfiguration : IEntityTypeConfiguration<NotificationLog>
+{
+    public void Configure(EntityTypeBuilder<NotificationLog> builder)
+    {
+        builder.ToTable("notification_log");
+
+        builder.HasKey(l => l.Id);
+        builder.Property(l => l.Id).HasColumnName("id");
+
+        builder.Property(l => l.ReminderId).HasColumnName("reminder_id").IsRequired();
+        builder.Property(l => l.SentAt).HasColumnName("sent_at").IsRequired();
+
+        builder.Property(l => l.Channel)
+            .HasColumnName("channel")
+            .HasMaxLength(20)
+            .HasConversion<string>()
+            .IsRequired();
+
+        builder.Property(l => l.DeliveryStatus)
+            .HasColumnName("delivery_status")
+            .HasMaxLength(20)
+            .HasConversion<string>()
+            .IsRequired();
+
+        builder.HasIndex(l => l.ReminderId).HasDatabaseName("ix_notification_log_reminder");
+    }
+}
+=== ./src/MediTrack.ReminderService.Infrastructure/Persistence/Configurations/NotificationPreferenceConfiguration.cs ===
+using MediTrack.ReminderService.Domain.Entities;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
+
+namespace MediTrack.ReminderService.Infrastructure.Persistence.Configurations;
+
+internal sealed class NotificationPreferenceConfiguration : IEntityTypeConfiguration<NotificationPreference>
+{
+    public void Configure(EntityTypeBuilder<NotificationPreference> builder)
+    {
+        builder.ToTable("notification_preference");
+
+        builder.HasKey(p => p.Id);
+        builder.Property(p => p.Id).HasColumnName("id");
+
+        builder.Property(p => p.PatientId).HasColumnName("patient_id").IsRequired();
+        builder.Property(p => p.SoundEnabled).HasColumnName("sound_enabled").IsRequired();
+        builder.Property(p => p.VibrationEnabled).HasColumnName("vibration_enabled").IsRequired();
+        builder.Property(p => p.RepeatCount).HasColumnName("repeat_count").IsRequired();
+        builder.Property(p => p.GlobalEnabled).HasColumnName("global_enabled").IsRequired();
+
+        // Un único registro de preferencias por paciente.
+        builder.HasIndex(p => p.PatientId).IsUnique().HasDatabaseName("ux_notification_preference_patient");
+    }
+}
+=== ./src/MediTrack.ReminderService.Infrastructure/Persistence/Configurations/OutboxMessageConfiguration.cs ===
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
+
+namespace MediTrack.ReminderService.Infrastructure.Persistence.Configurations;
+
+internal sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<OutboxMessage>
+{
+    public void Configure(EntityTypeBuilder<OutboxMessage> builder)
+    {
+        builder.ToTable("outbox_message");
+
+        builder.HasKey(m => m.Id);
+        builder.Property(m => m.Id).HasColumnName("id");
+
+        builder.Property(m => m.EventType).HasColumnName("event_type").HasMaxLength(100).IsRequired();
+        builder.Property(m => m.Payload).HasColumnName("payload").HasColumnType("json").IsRequired();
+        builder.Property(m => m.CorrelationId).HasColumnName("correlation_id").HasMaxLength(100);
+        builder.Property(m => m.OccurredAtUtc).HasColumnName("occurred_at").IsRequired();
+        builder.Property(m => m.ProcessedAtUtc).HasColumnName("processed_at");
+        builder.Property(m => m.Attempts).HasColumnName("attempts").IsRequired();
+        builder.Property(m => m.LastError).HasColumnName("last_error").HasMaxLength(500);
+
+        builder.HasIndex(m => m.ProcessedAtUtc).HasDatabaseName("ix_outbox_processed_at");
+    }
+}
+=== ./src/MediTrack.ReminderService.Infrastructure/Persistence/Configurations/ProcessedEventConfiguration.cs ===
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
+
+namespace MediTrack.ReminderService.Infrastructure.Persistence.Configurations;
+
+internal sealed class ProcessedEventConfiguration : IEntityTypeConfiguration<ProcessedEvent>
+{
+    public void Configure(EntityTypeBuilder<ProcessedEvent> builder)
+    {
+        builder.ToTable("processed_event");
+
+        builder.HasKey(e => e.EventId);
+        builder.Property(e => e.EventId).HasColumnName("event_id").ValueGeneratedNever();
+
+        builder.Property(e => e.EventType).HasColumnName("event_type").HasMaxLength(100).IsRequired();
+        builder.Property(e => e.ProcessedAtUtc).HasColumnName("processed_at").IsRequired();
+    }
+}
+=== ./src/MediTrack.ReminderService.Infrastructure/Persistence/Configurations/ReminderConfiguration.cs ===
+using MediTrack.ReminderService.Domain.Entities;
+using MediTrack.ReminderService.Domain.Enums;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
+
+namespace MediTrack.ReminderService.Infrastructure.Persistence.Configurations;
+
+internal sealed class ReminderConfiguration : IEntityTypeConfiguration<Reminder>
+{
+    public void Configure(EntityTypeBuilder<Reminder> builder)
+    {
+        builder.ToTable("reminder");
+
+        builder.HasKey(r => r.Id);
+        builder.Property(r => r.Id).HasColumnName("id");
+
+        builder.Property(r => r.PatientId).HasColumnName("patient_id").IsRequired();
+
+        builder.Property(r => r.EntityType)
+            .HasColumnName("entity_type")
+            .HasMaxLength(30)
+            .HasConversion<string>()
+            .IsRequired();
+
+        builder.Property(r => r.EntityId).HasColumnName("entity_id").IsRequired();
+
+        builder.Property(r => r.ScheduledAt).HasColumnName("scheduled_at").IsRequired();
+
+        builder.Property(r => r.Status)
+            .HasColumnName("status")
+            .HasMaxLength(20)
+            .HasConversion<string>()
+            .IsRequired();
+
+        builder.Property(r => r.CancelledAt).HasColumnName("cancelled_at");
+
+        builder.Property(r => r.Title).HasColumnName("title").HasMaxLength(150).IsRequired();
+        builder.Property(r => r.Body).HasColumnName("body").HasMaxLength(500).IsRequired();
+
+        // Índices para las consultas críticas del Scheduler y de la API (táctica 4.1.7).
+        builder.HasIndex(r => new { r.PatientId, r.Status }).HasDatabaseName("ix_reminder_patient_status");
+        builder.HasIndex(r => new { r.Status, r.ScheduledAt }).HasDatabaseName("ix_reminder_status_scheduled");
+        builder.HasIndex(r => new { r.PatientId, r.EntityType, r.EntityId })
+            .HasDatabaseName("ix_reminder_patient_entity");
+
+        builder.HasMany(r => r.NotificationLogs)
+            .WithOne()
+            .HasForeignKey(l => l.ReminderId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.Metadata
+            .FindNavigation(nameof(Reminder.NotificationLogs))!
+            .SetPropertyAccessMode(PropertyAccessMode.Field);
+    }
+}
+=== ./src/MediTrack.ReminderService.Infrastructure/Persistence/DatabaseConnectionPool.cs ===
+namespace MediTrack.ReminderService.Infrastructure.Persistence;
+
+/// <summary>
+/// Punto único de acceso a la cadena de conexión del pool de MySQL (patrón
+/// Singleton, sección 4.1.6). Se registra como Singleton en el contenedor y, junto
+/// con <c>AddDbContextPool</c>, asegura que exista un único pool de conexiones
+/// durante todo el ciclo de vida del servicio, evitando el agotamiento de recursos.
+/// </summary>
+public sealed class DatabaseConnectionPool
+{
+    public DatabaseConnectionPool(string connectionString)
+    {
+        if (string.IsNullOrWhiteSpace(connectionString))
+            throw new ArgumentException("La cadena de conexión de MySQL es obligatoria.", nameof(connectionString));
+
+        ConnectionString = connectionString;
+    }
+
+    public string ConnectionString { get; }
+}
+=== ./src/MediTrack.ReminderService.Infrastructure/Persistence/Migrations/20260606134639_InitialCreate.cs ===
+﻿using System;
+using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
+
+#nullable disable
+
+namespace MediTrack.ReminderService.Infrastructure.Persistence.Migrations
+{
+    /// <inheritdoc />
+    public partial class InitialCreate : Migration
+    {
+        /// <inheritdoc />
+        protected override void Up(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.AlterDatabase()
+                .Annotation("MySql:CharSet", "utf8mb4");
+
+            migrationBuilder.CreateTable(
+                name: "notification_preference",
+                columns: table => new
+                {
+                    id = table.Column<long>(type: "bigint", nullable: false)
+                        .Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
+                    patient_id = table.Column<long>(type: "bigint", nullable: false),
+                    sound_enabled = table.Column<bool>(type: "tinyint(1)", nullable: false),
+                    vibration_enabled = table.Column<bool>(type: "tinyint(1)", nullable: false),
+                    repeat_count = table.Column<int>(type: "int", nullable: false),
+                    global_enabled = table.Column<bool>(type: "tinyint(1)", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_notification_preference", x => x.id);
+                })
+                .Annotation("MySql:CharSet", "utf8mb4");
+
+            migrationBuilder.CreateTable(
+                name: "outbox_message",
+                columns: table => new
+                {
+                    id = table.Column<Guid>(type: "char(36)", nullable: false, collation: "ascii_general_ci"),
+                    event_type = table.Column<string>(type: "varchar(100)", maxLength: 100, nullable: false)
+                        .Annotation("MySql:CharSet", "utf8mb4"),
+                    payload = table.Column<string>(type: "json", nullable: false)
+                        .Annotation("MySql:CharSet", "utf8mb4"),
+                    correlation_id = table.Column<string>(type: "varchar(100)", maxLength: 100, nullable: true)
+                        .Annotation("MySql:CharSet", "utf8mb4"),
+                    occurred_at = table.Column<DateTime>(type: "datetime(6)", nullable: false),
+                    processed_at = table.Column<DateTime>(type: "datetime(6)", nullable: true),
+                    attempts = table.Column<int>(type: "int", nullable: false),
+                    last_error = table.Column<string>(type: "varchar(500)", maxLength: 500, nullable: true)
+                        .Annotation("MySql:CharSet", "utf8mb4")
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_outbox_message", x => x.id);
+                })
+                .Annotation("MySql:CharSet", "utf8mb4");
+
+            migrationBuilder.CreateTable(
+                name: "processed_event",
+                columns: table => new
+                {
+                    event_id = table.Column<Guid>(type: "char(36)", nullable: false, collation: "ascii_general_ci"),
+                    event_type = table.Column<string>(type: "varchar(100)", maxLength: 100, nullable: false)
+                        .Annotation("MySql:CharSet", "utf8mb4"),
+                    processed_at = table.Column<DateTime>(type: "datetime(6)", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_processed_event", x => x.event_id);
+                })
+                .Annotation("MySql:CharSet", "utf8mb4");
+
+            migrationBuilder.CreateTable(
+                name: "reminder",
+                columns: table => new
+                {
+                    id = table.Column<long>(type: "bigint", nullable: false)
+                        .Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
+                    patient_id = table.Column<long>(type: "bigint", nullable: false),
+                    entity_type = table.Column<string>(type: "varchar(30)", maxLength: 30, nullable: false)
+                        .Annotation("MySql:CharSet", "utf8mb4"),
+                    entity_id = table.Column<long>(type: "bigint", nullable: false),
+                    scheduled_at = table.Column<DateTime>(type: "datetime(6)", nullable: false),
+                    status = table.Column<string>(type: "varchar(20)", maxLength: 20, nullable: false)
+                        .Annotation("MySql:CharSet", "utf8mb4"),
+                    cancelled_at = table.Column<DateTime>(type: "datetime(6)", nullable: true),
+                    title = table.Column<string>(type: "varchar(150)", maxLength: 150, nullable: false)
+                        .Annotation("MySql:CharSet", "utf8mb4"),
+                    body = table.Column<string>(type: "varchar(500)", maxLength: 500, nullable: false)
+                        .Annotation("MySql:CharSet", "utf8mb4")
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_reminder", x => x.id);
+                })
+                .Annotation("MySql:CharSet", "utf8mb4");
+
+            migrationBuilder.CreateTable(
+                name: "notification_log",
+                columns: table => new
+                {
+                    id = table.Column<long>(type: "bigint", nullable: false)
+                        .Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
+                    reminder_id = table.Column<long>(type: "bigint", nullable: false),
+                    sent_at = table.Column<DateTime>(type: "datetime(6)", nullable: false),
+                    channel = table.Column<string>(type: "varchar(20)", maxLength: 20, nullable: false)
+                        .Annotation("MySql:CharSet", "utf8mb4"),
+                    delivery_status = table.Column<string>(type: "varchar(20)", maxLength: 20, nullable: false)
+                        .Annotation("MySql:CharSet", "utf8mb4")
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_notification_log", x => x.id);
+                    table.ForeignKey(
+                        name: "FK_notification_log_reminder_reminder_id",
+                        column: x => x.reminder_id,
+                        principalTable: "reminder",
+                        principalColumn: "id",
+                        onDelete: ReferentialAction.Cascade);
+                })
+                .Annotation("MySql:CharSet", "utf8mb4");
+
+            migrationBuilder.CreateIndex(
+                name: "ix_notification_log_reminder",
+                table: "notification_log",
+                column: "reminder_id");
+
+            migrationBuilder.CreateIndex(
+                name: "ux_notification_preference_patient",
+                table: "notification_preference",
+                column: "patient_id",
+                unique: true);
+
+            migrationBuilder.CreateIndex(
+                name: "ix_outbox_processed_at",
+                table: "outbox_message",
+                column: "processed_at");
+
+            migrationBuilder.CreateIndex(
+                name: "ix_reminder_patient_entity",
+                table: "reminder",
+                columns: new[] { "patient_id", "entity_type", "entity_id" });
+
+            migrationBuilder.CreateIndex(
+                name: "ix_reminder_patient_status",
+                table: "reminder",
+                columns: new[] { "patient_id", "status" });
+
+            migrationBuilder.CreateIndex(
+                name: "ix_reminder_status_scheduled",
+                table: "reminder",
+                columns: new[] { "status", "scheduled_at" });
+        }
+
+        /// <inheritdoc />
+        protected override void Down(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.DropTable(
+                name: "notification_log");
+
+            migrationBuilder.DropTable(
+                name: "notification_preference");
+
+            migrationBuilder.DropTable(
+                name: "outbox_message");
+
+            migrationBuilder.DropTable(
+                name: "processed_event");
+
+            migrationBuilder.DropTable(
+                name: "reminder");
+        }
+    }
+}
+=== ./src/MediTrack.ReminderService.Infrastructure/Persistence/Migrations/20260606134639_InitialCreate.Designer.cs ===
+﻿// <auto-generated />
+using System;
+using MediTrack.ReminderService.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
+
+#nullable disable
+
+namespace MediTrack.ReminderService.Infrastructure.Persistence.Migrations
+{
+    [DbContext(typeof(ReminderDbContext))]
+    [Migration("20260606134639_InitialCreate")]
+    partial class InitialCreate
+    {
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
+        {
+#pragma warning disable 612, 618
+            modelBuilder
+                .HasAnnotation("ProductVersion", "8.0.10")
+                .HasAnnotation("Relational:MaxIdentifierLength", 64);
+
+            MySqlModelBuilderExtensions.AutoIncrementColumns(modelBuilder);
+
+            modelBuilder.Entity("MediTrack.ReminderService.Domain.Entities.NotificationLog", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("Channel")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("varchar(20)")
+                        .HasColumnName("channel");
+
+                    b.Property<string>("DeliveryStatus")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("varchar(20)")
+                        .HasColumnName("delivery_status");
+
+                    b.Property<long>("ReminderId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("reminder_id");
+
+                    b.Property<DateTime>("SentAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("sent_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ReminderId")
+                        .HasDatabaseName("ix_notification_log_reminder");
+
+                    b.ToTable("notification_log", (string)null);
+                });
+
+            modelBuilder.Entity("MediTrack.ReminderService.Domain.Entities.NotificationPreference", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<bool>("GlobalEnabled")
+                        .HasColumnType("tinyint(1)")
+                        .HasColumnName("global_enabled");
+
+                    b.Property<long>("PatientId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("patient_id");
+
+                    b.Property<int>("RepeatCount")
+                        .HasColumnType("int")
+                        .HasColumnName("repeat_count");
+
+                    b.Property<bool>("SoundEnabled")
+                        .HasColumnType("tinyint(1)")
+                        .HasColumnName("sound_enabled");
+
+                    b.Property<bool>("VibrationEnabled")
+                        .HasColumnType("tinyint(1)")
+                        .HasColumnName("vibration_enabled");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PatientId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_notification_preference_patient");
+
+                    b.ToTable("notification_preference", (string)null);
+                });
+
+            modelBuilder.Entity("MediTrack.ReminderService.Domain.Entities.Reminder", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("Body")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)")
+                        .HasColumnName("body");
+
+                    b.Property<DateTime?>("CancelledAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("cancelled_at");
+
+                    b.Property<long>("EntityId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("entity_id");
+
+                    b.Property<string>("EntityType")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("varchar(30)")
+                        .HasColumnName("entity_type");
+
+                    b.Property<long>("PatientId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("patient_id");
+
+                    b.Property<DateTime>("ScheduledAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("scheduled_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("varchar(20)")
+                        .HasColumnName("status");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("varchar(150)")
+                        .HasColumnName("title");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PatientId", "Status")
+                        .HasDatabaseName("ix_reminder_patient_status");
+
+                    b.HasIndex("Status", "ScheduledAt")
+                        .HasDatabaseName("ix_reminder_status_scheduled");
+
+                    b.HasIndex("PatientId", "EntityType", "EntityId")
+                        .HasDatabaseName("ix_reminder_patient_entity");
+
+                    b.ToTable("reminder", (string)null);
+                });
+
+            modelBuilder.Entity("MediTrack.ReminderService.Infrastructure.Persistence.OutboxMessage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)")
+                        .HasColumnName("id");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("int")
+                        .HasColumnName("attempts");
+
+                    b.Property<string>("CorrelationId")
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)")
+                        .HasColumnName("correlation_id");
+
+                    b.Property<string>("EventType")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)")
+                        .HasColumnName("event_type");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)")
+                        .HasColumnName("last_error");
+
+                    b.Property<DateTime>("OccurredAtUtc")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("occurred_at");
+
+                    b.Property<string>("Payload")
+                        .IsRequired()
+                        .HasColumnType("json")
+                        .HasColumnName("payload");
+
+                    b.Property<DateTime?>("ProcessedAtUtc")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("processed_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProcessedAtUtc")
+                        .HasDatabaseName("ix_outbox_processed_at");
+
+                    b.ToTable("outbox_message", (string)null);
+                });
+
+            modelBuilder.Entity("MediTrack.ReminderService.Infrastructure.Persistence.ProcessedEvent", b =>
+                {
+                    b.Property<Guid>("EventId")
+                        .HasColumnType("char(36)")
+                        .HasColumnName("event_id");
+
+                    b.Property<string>("EventType")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)")
+                        .HasColumnName("event_type");
+
+                    b.Property<DateTime>("ProcessedAtUtc")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("processed_at");
+
+                    b.HasKey("EventId");
+
+                    b.ToTable("processed_event", (string)null);
+                });
+
+            modelBuilder.Entity("MediTrack.ReminderService.Domain.Entities.NotificationLog", b =>
+                {
+                    b.HasOne("MediTrack.ReminderService.Domain.Entities.Reminder", null)
+                        .WithMany("NotificationLogs")
+                        .HasForeignKey("ReminderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("MediTrack.ReminderService.Domain.Entities.Reminder", b =>
+                {
+                    b.Navigation("NotificationLogs");
+                });
+#pragma warning restore 612, 618
+        }
+    }
+}
+=== ./src/MediTrack.ReminderService.Infrastructure/Persistence/Migrations/ReminderDbContextModelSnapshot.cs ===
+﻿// <auto-generated />
+using System;
+using MediTrack.ReminderService.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
+
+#nullable disable
+
+namespace MediTrack.ReminderService.Infrastructure.Persistence.Migrations
+{
+    [DbContext(typeof(ReminderDbContext))]
+    partial class ReminderDbContextModelSnapshot : ModelSnapshot
+    {
+        protected override void BuildModel(ModelBuilder modelBuilder)
+        {
+#pragma warning disable 612, 618
+            modelBuilder
+                .HasAnnotation("ProductVersion", "8.0.10")
+                .HasAnnotation("Relational:MaxIdentifierLength", 64);
+
+            MySqlModelBuilderExtensions.AutoIncrementColumns(modelBuilder);
+
+            modelBuilder.Entity("MediTrack.ReminderService.Domain.Entities.NotificationLog", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("Channel")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("varchar(20)")
+                        .HasColumnName("channel");
+
+                    b.Property<string>("DeliveryStatus")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("varchar(20)")
+                        .HasColumnName("delivery_status");
+
+                    b.Property<long>("ReminderId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("reminder_id");
+
+                    b.Property<DateTime>("SentAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("sent_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ReminderId")
+                        .HasDatabaseName("ix_notification_log_reminder");
+
+                    b.ToTable("notification_log", (string)null);
+                });
+
+            modelBuilder.Entity("MediTrack.ReminderService.Domain.Entities.NotificationPreference", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<bool>("GlobalEnabled")
+                        .HasColumnType("tinyint(1)")
+                        .HasColumnName("global_enabled");
+
+                    b.Property<long>("PatientId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("patient_id");
+
+                    b.Property<int>("RepeatCount")
+                        .HasColumnType("int")
+                        .HasColumnName("repeat_count");
+
+                    b.Property<bool>("SoundEnabled")
+                        .HasColumnType("tinyint(1)")
+                        .HasColumnName("sound_enabled");
+
+                    b.Property<bool>("VibrationEnabled")
+                        .HasColumnType("tinyint(1)")
+                        .HasColumnName("vibration_enabled");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PatientId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_notification_preference_patient");
+
+                    b.ToTable("notification_preference", (string)null);
+                });
+
+            modelBuilder.Entity("MediTrack.ReminderService.Domain.Entities.Reminder", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("Body")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)")
+                        .HasColumnName("body");
+
+                    b.Property<DateTime?>("CancelledAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("cancelled_at");
+
+                    b.Property<long>("EntityId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("entity_id");
+
+                    b.Property<string>("EntityType")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("varchar(30)")
+                        .HasColumnName("entity_type");
+
+                    b.Property<long>("PatientId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("patient_id");
+
+                    b.Property<DateTime>("ScheduledAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("scheduled_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("varchar(20)")
+                        .HasColumnName("status");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("varchar(150)")
+                        .HasColumnName("title");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PatientId", "Status")
+                        .HasDatabaseName("ix_reminder_patient_status");
+
+                    b.HasIndex("Status", "ScheduledAt")
+                        .HasDatabaseName("ix_reminder_status_scheduled");
+
+                    b.HasIndex("PatientId", "EntityType", "EntityId")
+                        .HasDatabaseName("ix_reminder_patient_entity");
+
+                    b.ToTable("reminder", (string)null);
+                });
+
+            modelBuilder.Entity("MediTrack.ReminderService.Infrastructure.Persistence.OutboxMessage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)")
+                        .HasColumnName("id");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("int")
+                        .HasColumnName("attempts");
+
+                    b.Property<string>("CorrelationId")
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)")
+                        .HasColumnName("correlation_id");
+
+                    b.Property<string>("EventType")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)")
+                        .HasColumnName("event_type");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)")
+                        .HasColumnName("last_error");
+
+                    b.Property<DateTime>("OccurredAtUtc")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("occurred_at");
+
+                    b.Property<string>("Payload")
+                        .IsRequired()
+                        .HasColumnType("json")
+                        .HasColumnName("payload");
+
+                    b.Property<DateTime?>("ProcessedAtUtc")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("processed_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProcessedAtUtc")
+                        .HasDatabaseName("ix_outbox_processed_at");
+
+                    b.ToTable("outbox_message", (string)null);
+                });
+
+            modelBuilder.Entity("MediTrack.ReminderService.Infrastructure.Persistence.ProcessedEvent", b =>
+                {
+                    b.Property<Guid>("EventId")
+                        .HasColumnType("char(36)")
+                        .HasColumnName("event_id");
+
+                    b.Property<string>("EventType")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)")
+                        .HasColumnName("event_type");
+
+                    b.Property<DateTime>("ProcessedAtUtc")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("processed_at");
+
+                    b.HasKey("EventId");
+
+                    b.ToTable("processed_event", (string)null);
+                });
+
+            modelBuilder.Entity("MediTrack.ReminderService.Domain.Entities.NotificationLog", b =>
+                {
+                    b.HasOne("MediTrack.ReminderService.Domain.Entities.Reminder", null)
+                        .WithMany("NotificationLogs")
+                        .HasForeignKey("ReminderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("MediTrack.ReminderService.Domain.Entities.Reminder", b =>
+                {
+                    b.Navigation("NotificationLogs");
+                });
+#pragma warning restore 612, 618
+        }
+    }
+}
+=== ./src/MediTrack.ReminderService.Infrastructure/Persistence/OutboxMessage.cs ===
+namespace MediTrack.ReminderService.Infrastructure.Persistence;
+
+/// <summary>
+/// Mensaje saliente persistido en la misma transacción local que el cambio de
+/// dominio (patrón Outbox, AC-08). Un publicador en background lo entrega luego a
+/// RabbitMQ, garantizando que ningún evento se pierda si el broker está caído.
+/// </summary>
+public class OutboxMessage
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+
+    public string EventType { get; set; } = string.Empty;
+
+    public string Payload { get; set; } = string.Empty;
+
+    public string? CorrelationId { get; set; }
+
+    public DateTime OccurredAtUtc { get; set; }
+
+    public DateTime? ProcessedAtUtc { get; set; }
+
+    public int Attempts { get; set; }
+
+    public string? LastError { get; set; }
+}
+=== ./src/MediTrack.ReminderService.Infrastructure/Persistence/ProcessedEvent.cs ===
+namespace MediTrack.ReminderService.Infrastructure.Persistence;
+
+/// <summary>
+/// Registro de eventos ya consumidos (patrón Inbox). Garantiza el procesamiento
+/// idempotente: si RabbitMQ reentrega un mensaje, no se vuelve a aplicar.
+/// </summary>
+public class ProcessedEvent
+{
+    public Guid EventId { get; set; }
+
+    public string EventType { get; set; } = string.Empty;
+
+    public DateTime ProcessedAtUtc { get; set; }
+}
+=== ./src/MediTrack.ReminderService.Infrastructure/Persistence/ReminderDbContext.cs ===
+using MediTrack.ReminderService.Domain.Entities;
+using MediTrack.ReminderService.Domain.Repositories;
+using Microsoft.EntityFrameworkCore;
+
+namespace MediTrack.ReminderService.Infrastructure.Persistence;
+
+/// <summary>
+/// Contexto EF Core del Reminder Service. Cada microservicio posee su propio
+/// esquema MySQL aislado (patrón Database per Service, CON-01). Implementa
+/// <see cref="IUnitOfWork"/> para confirmar de forma atómica el agregado y el Outbox.
+/// </summary>
+public class ReminderDbContext : DbContext, IUnitOfWork
+{
+    public ReminderDbContext(DbContextOptions<ReminderDbContext> options) : base(options) { }
+
+    public DbSet<Reminder> Reminders => Set<Reminder>();
+    public DbSet<NotificationLog> NotificationLogs => Set<NotificationLog>();
+    public DbSet<NotificationPreference> NotificationPreferences => Set<NotificationPreference>();
+    public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
+    public DbSet<ProcessedEvent> ProcessedEvents => Set<ProcessedEvent>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        base.OnModelCreating(modelBuilder);
+        modelBuilder.ApplyConfigurationsFromAssembly(typeof(ReminderDbContext).Assembly);
+    }
+}
+=== ./src/MediTrack.ReminderService.Infrastructure/Persistence/Repositories/NotificationPreferenceRepository.cs ===
+using MediTrack.ReminderService.Domain.Entities;
+using MediTrack.ReminderService.Domain.Repositories;
+using Microsoft.EntityFrameworkCore;
+
+namespace MediTrack.ReminderService.Infrastructure.Persistence.Repositories;
+
+/// <summary>Implementación EF Core del repositorio de preferencias de notificación.</summary>
+public sealed class NotificationPreferenceRepository : INotificationPreferenceRepository
+{
+    private readonly ReminderDbContext _context;
+
+    public NotificationPreferenceRepository(ReminderDbContext context) => _context = context;
+
+    public Task<NotificationPreference?> GetByPatientAsync(long patientId, CancellationToken cancellationToken = default) =>
+        _context.NotificationPreferences.FirstOrDefaultAsync(p => p.PatientId == patientId, cancellationToken);
+
+    public async Task AddAsync(NotificationPreference preference, CancellationToken cancellationToken = default) =>
+        await _context.NotificationPreferences.AddAsync(preference, cancellationToken);
+
+    public void Update(NotificationPreference preference) => _context.NotificationPreferences.Update(preference);
+}
+=== ./src/MediTrack.ReminderService.Infrastructure/Persistence/Repositories/ReminderRepository.cs ===
+using MediTrack.ReminderService.Domain.Entities;
+using MediTrack.ReminderService.Domain.Enums;
+using MediTrack.ReminderService.Domain.Repositories;
+using Microsoft.EntityFrameworkCore;
+
+namespace MediTrack.ReminderService.Infrastructure.Persistence.Repositories;
+
+/// <summary>Implementación EF Core del repositorio de recordatorios (patrón Repository).</summary>
+public sealed class ReminderRepository : IReminderRepository
+{
+    private readonly ReminderDbContext _context;
+
+    public ReminderRepository(ReminderDbContext context) => _context = context;
+
+    public async Task AddAsync(Reminder reminder, CancellationToken cancellationToken = default) =>
+        await _context.Reminders.AddAsync(reminder, cancellationToken);
+
+    public Task<Reminder?> GetByIdAsync(long id, CancellationToken cancellationToken = default) =>
+        _context.Reminders.FirstOrDefaultAsync(r => r.Id == id, cancellationToken);
+
+    public async Task<IReadOnlyList<Reminder>> GetActiveByPatientAsync(long patientId, CancellationToken cancellationToken = default) =>
+        await _context.Reminders
+            .Where(r => r.PatientId == patientId && r.Status == ReminderStatus.Scheduled)
+            .OrderBy(r => r.ScheduledAt)
+            .ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<Reminder>> GetDueAsync(DateTime asOfUtc, int batchSize, CancellationToken cancellationToken = default) =>
+        await _context.Reminders
+            .Where(r => r.Status == ReminderStatus.Scheduled && r.ScheduledAt <= asOfUtc)
+            .OrderBy(r => r.ScheduledAt)
+            .Take(batchSize)
+            .ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<Reminder>> GetScheduledByEntityAsync(
+        long patientId, ReminderEntityType entityType, long entityId, CancellationToken cancellationToken = default) =>
+        await _context.Reminders
+            .Where(r => r.PatientId == patientId
+                        && r.EntityType == entityType
+                        && r.EntityId == entityId
+                        && r.Status == ReminderStatus.Scheduled)
+            .ToListAsync(cancellationToken);
+
+    public void Update(Reminder reminder) => _context.Reminders.Update(reminder);
+}
+=== ./src/MediTrack.ReminderService.Infrastructure/Scheduling/ReminderSchedulerHostedService.cs ===
+using MediTrack.ReminderService.Application.Abstractions;
+using MediTrack.ReminderService.Application.Services;
+using MediTrack.ReminderService.Domain.Repositories;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
+namespace MediTrack.ReminderService.Infrastructure.Scheduling;
+
+/// <summary>
+/// "Scheduler" (Fig. 17): gestiona la cola de recordatorios pendientes. En cada
+/// ciclo obtiene los recordatorios vencidos y delega su envío en el
+/// <see cref="NotificationApplicationService"/>, que aplica preferencias, reintentos
+/// y fallback. Es el motor del envío programado de notificaciones.
+/// </summary>
+public sealed class ReminderSchedulerHostedService : BackgroundService
+{
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly SchedulerOptions _options;
+    private readonly ILogger<ReminderSchedulerHostedService> _logger;
+
+    public ReminderSchedulerHostedService(
+        IServiceScopeFactory scopeFactory,
+        IOptions<SchedulerOptions> options,
+        ILogger<ReminderSchedulerHostedService> logger)
+    {
+        _scopeFactory = scopeFactory;
+        _options = options.Value;
+        _logger = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        var period = TimeSpan.FromSeconds(Math.Max(1, _options.PollingSeconds));
+        _logger.LogInformation("Scheduler de recordatorios iniciado (cada {Seconds}s).", _options.PollingSeconds);
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                await ProcessDueRemindersAsync(stoppingToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogError(ex, "Error en el ciclo del Scheduler.");
+            }
+
+            await Task.Delay(period, stoppingToken);
+        }
+    }
+
+    private async Task ProcessDueRemindersAsync(CancellationToken cancellationToken)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var reminders = scope.ServiceProvider.GetRequiredService<IReminderRepository>();
+        var clock = scope.ServiceProvider.GetRequiredService<IClock>();
+        var notifier = scope.ServiceProvider.GetRequiredService<NotificationApplicationService>();
+
+        var due = await reminders.GetDueAsync(clock.UtcNow, _options.BatchSize, cancellationToken);
+        if (due.Count == 0)
+            return;
+
+        _logger.LogInformation("Procesando {Count} recordatorios vencidos.", due.Count);
+
+        foreach (var reminder in due)
+        {
+            if (cancellationToken.IsCancellationRequested)
+                break;
+
+            await notifier.DispatchAsync(reminder, cancellationToken);
+        }
+    }
+}
+=== ./src/MediTrack.ReminderService.Infrastructure/Scheduling/SchedulerOptions.cs ===
+namespace MediTrack.ReminderService.Infrastructure.Scheduling;
+
+/// <summary>Configuración del Scheduler de recordatorios.</summary>
+public sealed class SchedulerOptions
+{
+    public const string SectionName = "Scheduler";
+
+    /// <summary>Segundos entre cada barrido de recordatorios vencidos.</summary>
+    public int PollingSeconds { get; set; } = 15;
+
+    /// <summary>Máximo de recordatorios procesados por ciclo.</summary>
+    public int BatchSize { get; set; } = 100;
+}
+=== ./src/MediTrack.ReminderService.Infrastructure/Time/SystemClock.cs ===
+using MediTrack.ReminderService.Application.Abstractions;
+
+namespace MediTrack.ReminderService.Infrastructure.Time;
+
+/// <summary>Reloj real del sistema, en UTC.</summary>
+public sealed class SystemClock : IClock
+{
+    public DateTime UtcNow => DateTime.UtcNow;
+}
+=== ./src/MediTrack.ReminderService.Infrastructure/Time/TaskDelayProvider.cs ===
+using MediTrack.ReminderService.Application.Abstractions;
+
+namespace MediTrack.ReminderService.Infrastructure.Time;
+
+/// <summary>Espera real basada en Task.Delay para el backoff entre reintentos.</summary>
+public sealed class TaskDelayProvider : IDelayProvider
+{
+    public Task DelayAsync(TimeSpan delay, CancellationToken cancellationToken = default) =>
+        Task.Delay(delay, cancellationToken);
+}
+=== ./tests/MediTrack.ReminderService.Tests/Application/NotificationApplicationServiceTests.cs ===
+using FluentAssertions;
+using MediTrack.ReminderService.Application.Configuration;
+using MediTrack.ReminderService.Application.IntegrationEvents;
+using MediTrack.ReminderService.Application.Services;
+using MediTrack.ReminderService.Domain.Entities;
+using MediTrack.ReminderService.Domain.Enums;
+using MediTrack.ReminderService.Domain.Factories;
+using MediTrack.ReminderService.Tests.TestDoubles;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using Xunit;
+
+namespace MediTrack.ReminderService.Tests.Application;
+
+public sealed class NotificationApplicationServiceTests
+{
+    private static readonly DateTime Now = new(2026, 6, 10, 8, 0, 0, DateTimeKind.Utc);
+
+    private static Reminder DueReminder() =>
+        new MedicationReminderFactory().CreateReminder(
+            new ReminderCreationContext(100, 50, Now, "Paracetamol", "500 mg"));
+
+    private static (NotificationApplicationService service,
+                    InMemoryReminderRepository reminders,
+                    RecordingEventPublisher publisher,
+                    ImmediateDelayProvider delay)
+        Build(FakeNotificationSender sender, NotificationPreference? preference = null)
+    {
+        var reminders = new InMemoryReminderRepository();
+        var preferences = new InMemoryNotificationPreferenceRepository();
+        if (preference is not null)
+            preferences.Seed(preference);
+
+        var publisher = new RecordingEventPublisher();
+        var delay = new ImmediateDelayProvider();
+        var options = Options.Create(new ReminderNotificationOptions
+        {
+            MaxAttempts = 3,
+            BaseDelaySeconds = 1,
+            EnableLocalFallback = true
+        });
+
+        var service = new NotificationApplicationService(
+            reminders, preferences, sender, publisher, new FakeUnitOfWork(),
+            new FakeClock(Now), delay, options, NullLogger<NotificationApplicationService>.Instance);
+
+        return (service, reminders, publisher, delay);
+    }
+
+    [Fact]
+    public async Task Dispatch_delivers_on_first_attempt()
+    {
+        var sender = FakeNotificationSender.AlwaysSucceeds();
+        var (service, _, publisher, _) = Build(sender);
+        var reminder = DueReminder();
+
+        var delivered = await service.DispatchAsync(reminder);
+
+        delivered.Should().BeTrue();
+        sender.Attempts.Should().Be(1);
+        reminder.Status.Should().Be(ReminderStatus.Sent);
+        publisher.Published.Should().ContainSingle(e => e is RecordatorioEnviadoEvent);
+    }
+
+    [Fact]
+    public async Task Dispatch_retries_with_backoff_then_falls_back_to_local()
+    {
+        var sender = FakeNotificationSender.AlwaysFails();
+        var (service, _, publisher, delay) = Build(sender);
+        var reminder = DueReminder();
+
+        var delivered = await service.DispatchAsync(reminder);
+
+        delivered.Should().BeTrue(); // entregado por fallback local (AC-09)
+        sender.Attempts.Should().Be(3); // agotó MaxAttempts en push
+        delay.DelayCount.Should().Be(2); // backoff entre los 3 intentos
+        reminder.NotificationLogs.Should().Contain(l => l.Channel == NotificationChannel.Local);
+        publisher.Published.OfType<RecordatorioEnviadoEvent>().Single().Delivered.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Dispatch_skips_when_global_notifications_disabled()
+    {
+        var preference = NotificationPreference.Default(100);
+        preference.Update(soundEnabled: true, vibrationEnabled: true, repeatCount: 1, globalEnabled: false);
+        var sender = FakeNotificationSender.AlwaysSucceeds();
+        var (service, _, _, _) = Build(sender, preference);
+        var reminder = DueReminder();
+
+        var delivered = await service.DispatchAsync(reminder);
+
+        delivered.Should().BeFalse();
+        sender.Attempts.Should().Be(0); // nunca se intenta enviar
+    }
+}
+=== ./tests/MediTrack.ReminderService.Tests/Application/ScheduleApplicationServiceTests.cs ===
+using FluentAssertions;
+using MediTrack.ReminderService.Application.IntegrationEvents;
+using MediTrack.ReminderService.Application.Services;
+using MediTrack.ReminderService.Domain.Enums;
+using MediTrack.ReminderService.Domain.Factories;
+using MediTrack.ReminderService.Tests.TestDoubles;
+using Microsoft.Extensions.Logging.Abstractions;
+using Xunit;
+
+namespace MediTrack.ReminderService.Tests.Application;
+
+public sealed class ScheduleApplicationServiceTests
+{
+    private static readonly DateTime Now = new(2026, 6, 10, 8, 0, 0, DateTimeKind.Utc);
+
+    private static (ScheduleApplicationService service, InMemoryReminderRepository reminders) Build()
+    {
+        var reminders = new InMemoryReminderRepository();
+        var provider = new ReminderFactoryProvider(new ReminderFactory[]
+        {
+            new MedicationReminderFactory(),
+            new AppointmentReminderFactory(),
+            new ExamReminderFactory()
+        });
+        var service = new ScheduleApplicationService(
+            reminders, provider, new FakeUnitOfWork(), new FakeClock(Now),
+            NullLogger<ScheduleApplicationService>.Instance);
+        return (service, reminders);
+    }
+
+    [Fact]
+    public async Task HandleRecetaCargada_creates_one_reminder_per_medication()
+    {
+        var (service, reminders) = Build();
+        var @event = new RecetaCargadaEvent
+        {
+            PatientId = 100,
+            PrescriptionId = 1,
+            Medications = new[]
+            {
+                new MedicationScheduleItem(1, "Paracetamol", "500 mg", Now.AddHours(1)),
+                new MedicationScheduleItem(2, "Ibuprofeno", "400 mg", Now.AddHours(2))
+            }
+        };
+
+        await service.HandleRecetaCargadaAsync(@event);
+
+        reminders.Store.Should().HaveCount(2);
+        reminders.Store.Should().OnlyContain(r => r.EntityType == ReminderEntityType.Medication);
+    }
+
+    [Fact]
+    public async Task HandleCumplimientoRegistrado_cancels_pending_reminders_of_entity()
+    {
+        var (service, reminders) = Build();
+        await service.HandleRecetaCargadaAsync(new RecetaCargadaEvent
+        {
+            PatientId = 100,
+            PrescriptionId = 1,
+            Medications = new[] { new MedicationScheduleItem(1, "Paracetamol", "500 mg", Now.AddHours(1)) }
+        });
+
+        await service.HandleCumplimientoRegistradoAsync(new CumplimientoRegistradoEvent
+        {
+            PatientId = 100,
+            EntityType = ReminderEntityType.Medication,
+            EntityId = 1
+        });
+
+        reminders.Store.Should().ContainSingle()
+            .Which.Status.Should().Be(ReminderStatus.Cancelled);
+    }
+
+    [Fact]
+    public async Task CancelReminder_returns_false_when_not_found()
+    {
+        var (service, _) = Build();
+
+        var result = await service.CancelReminderAsync(reminderId: 999);
+
+        result.Should().BeFalse();
+    }
+}
+=== ./tests/MediTrack.ReminderService.Tests/Domain/ReminderFactoryTests.cs ===
+using FluentAssertions;
+using MediTrack.ReminderService.Domain.Enums;
+using MediTrack.ReminderService.Domain.Factories;
+using Xunit;
+
+namespace MediTrack.ReminderService.Tests.Domain;
+
+public sealed class ReminderFactoryTests
+{
+    private static readonly DateTime Event = new(2026, 6, 10, 8, 0, 0, DateTimeKind.Utc);
+
+    [Fact]
+    public void MedicationFactory_schedules_at_dose_time_and_mentions_medication()
+    {
+        var factory = new MedicationReminderFactory();
+        var context = new ReminderCreationContext(PatientId: 1, EntityId: 50, Event, "Paracetamol", "500 mg");
+
+        var reminder = factory.CreateReminder(context);
+
+        reminder.EntityType.Should().Be(ReminderEntityType.Medication);
+        reminder.ScheduledAt.Should().Be(Event); // sin anticipación
+        reminder.Body.Should().Contain("Paracetamol").And.Contain("500 mg");
+        reminder.Status.Should().Be(ReminderStatus.Scheduled);
+    }
+
+    [Fact]
+    public void AppointmentFactory_schedules_24_hours_before()
+    {
+        var factory = new AppointmentReminderFactory();
+        var context = new ReminderCreationContext(1, 70, Event, "Cardiología", "Sede San Borja");
+
+        var reminder = factory.CreateReminder(context);
+
+        reminder.EntityType.Should().Be(ReminderEntityType.Appointment);
+        reminder.ScheduledAt.Should().Be(Event.AddHours(-24));
+        reminder.Body.Should().Contain("Cardiología");
+    }
+
+    [Fact]
+    public void ExamFactory_schedules_2_hours_before()
+    {
+        var factory = new ExamReminderFactory();
+        var context = new ReminderCreationContext(1, 90, Event, "Hemograma completo");
+
+        var reminder = factory.CreateReminder(context);
+
+        reminder.EntityType.Should().Be(ReminderEntityType.Exam);
+        reminder.ScheduledAt.Should().Be(Event.AddHours(-2));
+        reminder.Body.Should().Contain("Hemograma");
+    }
+
+    [Fact]
+    public void Provider_returns_the_specialized_factory_for_each_type()
+    {
+        var provider = new ReminderFactoryProvider(new ReminderFactory[]
+        {
+            new MedicationReminderFactory(),
+            new AppointmentReminderFactory(),
+            new ExamReminderFactory()
+        });
+
+        provider.For(ReminderEntityType.Medication).Should().BeOfType<MedicationReminderFactory>();
+        provider.For(ReminderEntityType.Appointment).Should().BeOfType<AppointmentReminderFactory>();
+        provider.For(ReminderEntityType.Exam).Should().BeOfType<ExamReminderFactory>();
+    }
+}
+=== ./tests/MediTrack.ReminderService.Tests/Domain/ReminderTests.cs ===
+using FluentAssertions;
+using MediTrack.ReminderService.Domain.Enums;
+using MediTrack.ReminderService.Domain.Factories;
+using Xunit;
+
+namespace MediTrack.ReminderService.Tests.Domain;
+
+public sealed class ReminderTests
+{
+    private static readonly DateTime Now = new(2026, 6, 10, 8, 0, 0, DateTimeKind.Utc);
+
+    private static MediTrack.ReminderService.Domain.Entities.Reminder NewMedicationReminder() =>
+        new MedicationReminderFactory().CreateReminder(
+            new ReminderCreationContext(1, 50, Now, "Paracetamol", "500 mg"));
+
+    [Fact]
+    public void Cancel_marks_status_and_timestamp()
+    {
+        var reminder = NewMedicationReminder();
+
+        reminder.Cancel(Now);
+
+        reminder.Status.Should().Be(ReminderStatus.Cancelled);
+        reminder.CancelledAt.Should().Be(Now);
+    }
+
+    [Fact]
+    public void Cancel_is_idempotent_and_does_not_override_sent()
+    {
+        var reminder = NewMedicationReminder();
+        reminder.RegisterDeliveryAttempt(NotificationChannel.Push, DeliveryStatus.Delivered, Now);
+
+        reminder.Cancel(Now.AddMinutes(5));
+
+        reminder.Status.Should().Be(ReminderStatus.Sent); // no se sobreescribe un envío confirmado
+    }
+
+    [Fact]
+    public void RegisterDeliveryAttempt_delivered_transitions_to_sent_and_logs()
+    {
+        var reminder = NewMedicationReminder();
+
+        reminder.RegisterDeliveryAttempt(NotificationChannel.Push, DeliveryStatus.Delivered, Now);
+
+        reminder.Status.Should().Be(ReminderStatus.Sent);
+        reminder.NotificationLogs.Should().ContainSingle();
+    }
+
+    [Fact]
+    public void IsDue_is_true_only_for_scheduled_and_past()
+    {
+        var reminder = NewMedicationReminder();
+
+        reminder.IsDue(Now).Should().BeTrue();
+        reminder.IsDue(Now.AddMinutes(-1)).Should().BeFalse();
+    }
+}
+=== ./tests/MediTrack.ReminderService.Tests/Features/MedicationReminderStepDefinitions.cs ===
+using System.Globalization;
+using FluentAssertions;
+using MediTrack.ReminderService.Application.IntegrationEvents;
+using MediTrack.ReminderService.Application.Services;
+using MediTrack.ReminderService.Domain.Enums;
+using MediTrack.ReminderService.Domain.Factories;
+using MediTrack.ReminderService.Tests.TestDoubles;
+using Microsoft.Extensions.Logging.Abstractions;
+using Reqnroll;
+
+namespace MediTrack.ReminderService.Tests.Features;
+
+/// <summary>
+/// Implementación de los pasos del feature BDD. Ejercita el flujo real de generación
+/// y cancelación de recordatorios a través del ScheduleApplicationService.
+/// </summary>
+[Binding]
+public sealed class MedicationReminderStepDefinitions
+{
+    private readonly InMemoryReminderRepository _reminders = new();
+    private readonly ScheduleApplicationService _service;
+
+    private long _patientId;
+    private long _medicationId = 1;
+    private string _medicationName = string.Empty;
+    private string _dose = string.Empty;
+    private DateTime _doseTimeUtc;
+
+    public MedicationReminderStepDefinitions()
+    {
+        var provider = new ReminderFactoryProvider(new ReminderFactory[]
+        {
+            new MedicationReminderFactory(),
+            new AppointmentReminderFactory(),
+            new ExamReminderFactory()
+        });
+        _service = new ScheduleApplicationService(
+            _reminders, provider, new FakeUnitOfWork(),
+            new FakeClock(new DateTime(2026, 6, 10, 0, 0, 0, DateTimeKind.Utc)),
+            NullLogger<ScheduleApplicationService>.Instance);
+    }
+
+    [Given(@"una receta del paciente (\d+) con el medicamento ""(.*)"" dosis ""(.*)"" a las ""(.*)""")]
+    public void GivenUnaReceta(long patientId, string medication, string dose, string doseTime)
+    {
+        _patientId = patientId;
+        _medicationName = medication;
+        _dose = dose;
+        _doseTimeUtc = ParseUtc(doseTime);
+    }
+
+    [When(@"se procesa el evento RecetaCargada")]
+    public async Task WhenSeProcesaRecetaCargada()
+    {
+        await _service.HandleRecetaCargadaAsync(new RecetaCargadaEvent
+        {
+            PatientId = _patientId,
+            PrescriptionId = 1,
+            Medications = new[] { new MedicationScheduleItem(_medicationId, _medicationName, _dose, _doseTimeUtc) }
+        });
+    }
+
+    [When(@"se procesa el evento CumplimientoRegistrado para el medicamento (\d+) del paciente (\d+)")]
+    public async Task WhenSeProcesaCumplimiento(long medicationId, long patientId)
+    {
+        await _service.HandleCumplimientoRegistradoAsync(new CumplimientoRegistradoEvent
+        {
+            PatientId = patientId,
+            EntityType = ReminderEntityType.Medication,
+            EntityId = medicationId
+        });
+    }
+
+    [Then(@"existe (\d+) recordatorio programado para el paciente (\d+)")]
+    public void ThenExisteRecordatorio(int count, long patientId)
+    {
+        _reminders.Store
+            .Count(r => r.PatientId == patientId && r.Status == ReminderStatus.Scheduled)
+            .Should().Be(count);
+    }
+
+    [Then(@"el recordatorio queda programado para las ""(.*)""")]
+    public void ThenProgramadoPara(string scheduledAt)
+    {
+        _reminders.Store.Single().ScheduledAt.Should().Be(ParseUtc(scheduledAt));
+    }
+
+    [Then(@"el mensaje del recordatorio menciona ""(.*)""")]
+    public void ThenMensajeMenciona(string text)
+    {
+        _reminders.Store.Single().Body.Should().Contain(text);
+    }
+
+    [Then(@"el recordatorio del paciente (\d+) queda cancelado")]
+    public void ThenRecordatorioCancelado(long patientId)
+    {
+        _reminders.Store
+            .Single(r => r.PatientId == patientId)
+            .Status.Should().Be(ReminderStatus.Cancelled);
+    }
+
+    private static DateTime ParseUtc(string value) =>
+        DateTime.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal);
+}
+=== ./tests/MediTrack.ReminderService.Tests/obj/Debug/net8.0/.NETCoreApp,Version=v8.0.AssemblyAttributes.cs ===
+// <autogenerated />
+using System;
+using System.Reflection;
+[assembly: global::System.Runtime.Versioning.TargetFrameworkAttribute(".NETCoreApp,Version=v8.0", FrameworkDisplayName = ".NET 8.0")]
+=== ./tests/MediTrack.ReminderService.Tests/obj/Debug/net8.0/MediTrack.ReminderService.Tests.AssemblyInfo.cs ===
+//------------------------------------------------------------------------------
+// <auto-generated>
+//     This code was generated by a tool.
+//
+//     Changes to this file may cause incorrect behavior and will be lost if
+//     the code is regenerated.
+// </auto-generated>
+//------------------------------------------------------------------------------
+
+using System;
+using System.Reflection;
+
+[assembly: System.Reflection.AssemblyCompanyAttribute("MediTrack.ReminderService.Tests")]
+[assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
+[assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+d00ea168358d2a6bb2dc22f82c5896a73e385389")]
+[assembly: System.Reflection.AssemblyProductAttribute("MediTrack.ReminderService.Tests")]
+[assembly: System.Reflection.AssemblyTitleAttribute("MediTrack.ReminderService.Tests")]
+[assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
+
+// Generado por la clase WriteCodeFragment de MSBuild.
+
+=== ./tests/MediTrack.ReminderService.Tests/obj/Debug/net8.0/MediTrack.ReminderService.Tests.GlobalUsings.g.cs ===
+// <auto-generated/>
+global using global::System;
+global using global::System.Collections.Generic;
+global using global::System.IO;
+global using global::System.Linq;
+global using global::System.Net.Http;
+global using global::System.Threading;
+global using global::System.Threading.Tasks;
+=== ./tests/MediTrack.ReminderService.Tests/obj/Debug/net8.0/xUnit.AssemblyHooks.cs ===
+// <auto-generated />
+#pragma warning disable
+
+using System.CodeDom.Compiler;
+using global::System.Runtime.CompilerServices;
+using System.Threading.Tasks;
+
+[assembly: global::Xunit.TestFramework("Reqnroll.xUnit.ReqnrollPlugin.XunitTestFrameworkWithAssemblyFixture", "Reqnroll.xUnit.ReqnrollPlugin")]
+[assembly: global::Reqnroll.xUnit.ReqnrollPlugin.AssemblyFixture(typeof(global::MediTrack_ReminderService_Tests_XUnitAssemblyFixture))]
+
+[GeneratedCode("Reqnroll", "2.1.0")]
+public class MediTrack_ReminderService_Tests_XUnitAssemblyFixture : global::Xunit.IAsyncLifetime
+{
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public async Task InitializeAsync()
+    {
+        var currentAssembly = typeof(MediTrack_ReminderService_Tests_XUnitAssemblyFixture).Assembly;
+        await global::Reqnroll.TestRunnerManager.OnTestRunStartAsync(currentAssembly);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public async Task DisposeAsync()
+    {
+        var currentAssembly = typeof(MediTrack_ReminderService_Tests_XUnitAssemblyFixture).Assembly;
+        await global::Reqnroll.TestRunnerManager.OnTestRunEndAsync(currentAssembly);
+    }
+}
+
+[global::Xunit.CollectionDefinition("ReqnrollNonParallelizableFeatures", DisableParallelization = true)]
+public class MediTrack_ReminderService_Tests_ReqnrollNonParallelizableFeaturesCollectionDefinition
+{
+}
+#pragma warning restore
+=== ./tests/MediTrack.ReminderService.Tests/TestDoubles/Fakes.cs ===
+using MediTrack.ReminderService.Application.Abstractions;
+using MediTrack.ReminderService.Application.IntegrationEvents;
+using MediTrack.ReminderService.Domain.Repositories;
+
+namespace MediTrack.ReminderService.Tests.TestDoubles;
+
+/// <summary>Reloj fijo controlable en pruebas.</summary>
+public sealed class FakeClock : IClock
+{
+    public FakeClock(DateTime utcNow) => UtcNow = utcNow;
+    public DateTime UtcNow { get; set; }
+}
+
+/// <summary>Backoff instantáneo: no espera realmente entre reintentos.</summary>
+public sealed class ImmediateDelayProvider : IDelayProvider
+{
+    public int DelayCount { get; private set; }
+
+    public Task DelayAsync(TimeSpan delay, CancellationToken cancellationToken = default)
+    {
+        DelayCount++;
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>Sender configurable que registra cuántas veces se le llamó.</summary>
+public sealed class FakeNotificationSender : INotificationSender
+{
+    private readonly Func<int, bool> _successByAttempt;
+
+    public FakeNotificationSender(Func<int, bool> successByAttempt) => _successByAttempt = successByAttempt;
+
+    public static FakeNotificationSender AlwaysSucceeds() => new(_ => true);
+    public static FakeNotificationSender AlwaysFails() => new(_ => false);
+
+    public int Attempts { get; private set; }
+    public List<NotificationMessage> SentMessages { get; } = new();
+
+    public Task<NotificationDeliveryResult> SendAsync(NotificationMessage message, CancellationToken cancellationToken = default)
+    {
+        var current = Attempts++;
+        SentMessages.Add(message);
+        return Task.FromResult(_successByAttempt(current)
+            ? NotificationDeliveryResult.Ok("fake")
+            : NotificationDeliveryResult.Fail("fake failure"));
+    }
+}
+
+/// <summary>Publicador que acumula los eventos encolados al Outbox.</summary>
+public sealed class RecordingEventPublisher : IIntegrationEventPublisher
+{
+    public List<IntegrationEvent> Published { get; } = new();
+
+    public Task EnqueueAsync(IntegrationEvent integrationEvent, CancellationToken cancellationToken = default)
+    {
+        Published.Add(integrationEvent);
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>UnitOfWork que cuenta confirmaciones sin persistir.</summary>
+public sealed class FakeUnitOfWork : IUnitOfWork
+{
+    public int SaveCount { get; private set; }
+
+    public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+    {
+        SaveCount++;
+        return Task.FromResult(0);
+    }
+}
+=== ./tests/MediTrack.ReminderService.Tests/TestDoubles/InMemoryNotificationPreferenceRepository.cs ===
+using MediTrack.ReminderService.Domain.Entities;
+using MediTrack.ReminderService.Domain.Repositories;
+
+namespace MediTrack.ReminderService.Tests.TestDoubles;
+
+/// <summary>Repositorio de preferencias en memoria para pruebas.</summary>
+public sealed class InMemoryNotificationPreferenceRepository : INotificationPreferenceRepository
+{
+    private readonly List<NotificationPreference> _store = new();
+
+    public void Seed(NotificationPreference preference) => _store.Add(preference);
+
+    public Task<NotificationPreference?> GetByPatientAsync(long patientId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(_store.FirstOrDefault(p => p.PatientId == patientId));
+
+    public Task AddAsync(NotificationPreference preference, CancellationToken cancellationToken = default)
+    {
+        _store.Add(preference);
+        return Task.CompletedTask;
+    }
+
+    public void Update(NotificationPreference preference) { /* ya está en la lista */ }
+}
+=== ./tests/MediTrack.ReminderService.Tests/TestDoubles/InMemoryReminderRepository.cs ===
+using MediTrack.ReminderService.Domain.Entities;
+using MediTrack.ReminderService.Domain.Enums;
+using MediTrack.ReminderService.Domain.Repositories;
+
+namespace MediTrack.ReminderService.Tests.TestDoubles;
+
+/// <summary>Repositorio en memoria para aislar las pruebas de la infraestructura real.</summary>
+public sealed class InMemoryReminderRepository : IReminderRepository
+{
+    private readonly List<Reminder> _store = new();
+    private long _sequence;
+
+    public IReadOnlyList<Reminder> Store => _store;
+
+    public Task AddAsync(Reminder reminder, CancellationToken cancellationToken = default)
+    {
+        AssignId(reminder, ++_sequence);
+        _store.Add(reminder);
+        return Task.CompletedTask;
+    }
+
+    public Task<Reminder?> GetByIdAsync(long id, CancellationToken cancellationToken = default) =>
+        Task.FromResult(_store.FirstOrDefault(r => r.Id == id));
+
+    public Task<IReadOnlyList<Reminder>> GetActiveByPatientAsync(long patientId, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<Reminder>>(_store
+            .Where(r => r.PatientId == patientId && r.Status == ReminderStatus.Scheduled)
+            .OrderBy(r => r.ScheduledAt)
+            .ToList());
+
+    public Task<IReadOnlyList<Reminder>> GetDueAsync(DateTime asOfUtc, int batchSize, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<Reminder>>(_store
+            .Where(r => r.Status == ReminderStatus.Scheduled && r.ScheduledAt <= asOfUtc)
+            .OrderBy(r => r.ScheduledAt)
+            .Take(batchSize)
+            .ToList());
+
+    public Task<IReadOnlyList<Reminder>> GetScheduledByEntityAsync(
+        long patientId, ReminderEntityType entityType, long entityId, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<Reminder>>(_store
+            .Where(r => r.PatientId == patientId
+                        && r.EntityType == entityType
+                        && r.EntityId == entityId
+                        && r.Status == ReminderStatus.Scheduled)
+            .ToList());
+
+    public void Update(Reminder reminder) { /* el agregado ya vive en la lista en memoria */ }
+
+    private static void AssignId(Reminder reminder, long id) =>
+        typeof(Reminder).GetProperty(nameof(Reminder.Id))!.SetValue(reminder, id);
+}

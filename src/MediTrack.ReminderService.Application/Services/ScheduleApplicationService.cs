@@ -117,7 +117,7 @@ public sealed class ScheduleApplicationService
     }
 
     /// <summary>Lista los recordatorios activos del paciente (GET /reminders/patients/{patientId}).</summary>
-    public async Task<IReadOnlyList<ReminderDto>> GetActiveByPatientAsync(long patientId, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<ReminderDto>> GetActiveByPatientAsync(int patientId, CancellationToken cancellationToken = default)
     {
         var reminders = await _reminders.GetActiveByPatientAsync(patientId, cancellationToken);
         return reminders.Select(ReminderDto.FromEntity).ToList();

@@ -10,7 +10,7 @@ public sealed class InMemoryNotificationPreferenceRepository : INotificationPref
 
     public void Seed(NotificationPreference preference) => _store.Add(preference);
 
-    public Task<NotificationPreference?> GetByPatientAsync(long patientId, CancellationToken cancellationToken = default) =>
+    public Task<NotificationPreference?> GetByPatientAsync(int patientId, CancellationToken cancellationToken = default) =>
         Task.FromResult(_store.FirstOrDefault(p => p.PatientId == patientId));
 
     public Task AddAsync(NotificationPreference preference, CancellationToken cancellationToken = default)
