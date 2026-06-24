@@ -12,7 +12,7 @@ public class NotificationPreference
 
     public long Id { get; private set; }
 
-    public long PatientId { get; private set; }
+    public int PatientId { get; private set; }
 
     public bool SoundEnabled { get; private set; }
 
@@ -25,7 +25,7 @@ public class NotificationPreference
     public bool GlobalEnabled { get; private set; }
 
     /// <summary>Preferencia por defecto para un paciente sin configuración explícita.</summary>
-    public static NotificationPreference Default(long patientId) => new()
+    public static NotificationPreference Default(int patientId) => new()
     {
         PatientId = patientId,
         SoundEnabled = true,

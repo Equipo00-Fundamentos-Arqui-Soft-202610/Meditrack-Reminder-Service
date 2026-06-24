@@ -11,7 +11,7 @@ namespace MediTrack.ReminderService.Domain.Factories;
 /// <param name="Subject">Texto descriptivo principal (nombre del medicamento, tipo de cita o examen).</param>
 /// <param name="Detail">Detalle opcional (dosis, ubicación, indicaciones).</param>
 public sealed record ReminderCreationContext(
-    long PatientId,
+    int PatientId,
     long EntityId,
     DateTime EventTimeUtc,
     string Subject,

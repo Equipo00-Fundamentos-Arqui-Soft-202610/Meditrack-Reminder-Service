@@ -9,7 +9,7 @@ public sealed record StockBajoEvent : IntegrationEvent
 {
     public override string EventType => "StockBajo";
 
-    public long PatientId { get; init; }
+    public int PatientId { get; init; }
 
     public long MedicationId { get; init; }
 

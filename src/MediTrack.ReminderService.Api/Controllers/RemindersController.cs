@@ -22,10 +22,10 @@ public sealed class RemindersController : ControllerBase
     /// <summary>Lista los recordatorios activos (programados) de un paciente.</summary>
     /// <param name="patientId">Identificador del paciente.</param>
     /// <response code="200">Lista de recordatorios activos.</response>
-    [HttpGet("patients/{patientId:long}")]
+    [HttpGet("patients/{patientId:int}")]
     [ProducesResponseType(typeof(IReadOnlyList<ReminderDto>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<ReminderDto>>> GetByPatient(
-        long patientId, CancellationToken cancellationToken)
+        int patientId, CancellationToken cancellationToken)
     {
         var reminders = await _schedule.GetActiveByPatientAsync(patientId, cancellationToken);
         return Ok(reminders);

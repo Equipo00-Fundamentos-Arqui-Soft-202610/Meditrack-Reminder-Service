@@ -18,7 +18,7 @@ public sealed class ReminderRepository : IReminderRepository
     public Task<Reminder?> GetByIdAsync(long id, CancellationToken cancellationToken = default) =>
         _context.Reminders.FirstOrDefaultAsync(r => r.Id == id, cancellationToken);
 
-    public async Task<IReadOnlyList<Reminder>> GetActiveByPatientAsync(long patientId, CancellationToken cancellationToken = default) =>
+    public async Task<IReadOnlyList<Reminder>> GetActiveByPatientAsync(int patientId, CancellationToken cancellationToken = default) =>
         await _context.Reminders
             .Where(r => r.PatientId == patientId && r.Status == ReminderStatus.Scheduled)
             .OrderBy(r => r.ScheduledAt)
@@ -32,7 +32,7 @@ public sealed class ReminderRepository : IReminderRepository
             .ToListAsync(cancellationToken);
 
     public async Task<IReadOnlyList<Reminder>> GetScheduledByEntityAsync(
-        long patientId, ReminderEntityType entityType, long entityId, CancellationToken cancellationToken = default) =>
+        int patientId, ReminderEntityType entityType, long entityId, CancellationToken cancellationToken = default) =>
         await _context.Reminders
             .Where(r => r.PatientId == patientId
                         && r.EntityType == entityType

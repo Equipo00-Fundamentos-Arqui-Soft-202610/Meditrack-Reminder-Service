@@ -8,7 +8,7 @@ public sealed record CitaAgendadaEvent : IntegrationEvent
 {
     public override string EventType => "CitaAgendada";
 
-    public long PatientId { get; init; }
+    public int PatientId { get; init; }
 
     public long AppointmentId { get; init; }
 

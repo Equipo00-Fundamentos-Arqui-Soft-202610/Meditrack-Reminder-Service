@@ -11,7 +11,7 @@ public sealed class NotificationPreferenceRepository : INotificationPreferenceRe
 
     public NotificationPreferenceRepository(ReminderDbContext context) => _context = context;
 
-    public Task<NotificationPreference?> GetByPatientAsync(long patientId, CancellationToken cancellationToken = default) =>
+    public Task<NotificationPreference?> GetByPatientAsync(int patientId, CancellationToken cancellationToken = default) =>
         _context.NotificationPreferences.FirstOrDefaultAsync(p => p.PatientId == patientId, cancellationToken);
 
     public async Task AddAsync(NotificationPreference preference, CancellationToken cancellationToken = default) =>

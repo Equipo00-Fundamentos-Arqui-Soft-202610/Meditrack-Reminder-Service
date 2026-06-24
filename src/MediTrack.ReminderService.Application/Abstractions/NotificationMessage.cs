@@ -8,7 +8,7 @@ namespace MediTrack.ReminderService.Application.Abstractions;
 /// Service no necesita almacenar tokens de dispositivo (desacoplamiento).
 /// </summary>
 public sealed record NotificationMessage(
-    long PatientId,
+    int PatientId,
     string Topic,
     string Title,
     string Body,

@@ -20,7 +20,7 @@ public sealed class MedicationReminderStepDefinitions
     private readonly InMemoryReminderRepository _reminders = new();
     private readonly ScheduleApplicationService _service;
 
-    private long _patientId;
+    private int _patientId;
     private long _medicationId = 1;
     private string _medicationName = string.Empty;
     private string _dose = string.Empty;
@@ -41,7 +41,7 @@ public sealed class MedicationReminderStepDefinitions
     }
 
     [Given(@"una receta del paciente (\d+) con el medicamento ""(.*)"" dosis ""(.*)"" a las ""(.*)""")]
-    public void GivenUnaReceta(long patientId, string medication, string dose, string doseTime)
+    public void GivenUnaReceta(int patientId, string medication, string dose, string doseTime)
     {
         _patientId = patientId;
         _medicationName = medication;
@@ -61,7 +61,7 @@ public sealed class MedicationReminderStepDefinitions
     }
 
     [When(@"se procesa el evento CumplimientoRegistrado para el medicamento (\d+) del paciente (\d+)")]
-    public async Task WhenSeProcesaCumplimiento(long medicationId, long patientId)
+    public async Task WhenSeProcesaCumplimiento(long medicationId, int patientId)
     {
         await _service.HandleCumplimientoRegistradoAsync(new CumplimientoRegistradoEvent
         {
@@ -72,7 +72,7 @@ public sealed class MedicationReminderStepDefinitions
     }
 
     [Then(@"existe (\d+) recordatorio programado para el paciente (\d+)")]
-    public void ThenExisteRecordatorio(int count, long patientId)
+    public void ThenExisteRecordatorio(int count, int patientId)
     {
         _reminders.Store
             .Count(r => r.PatientId == patientId && r.Status == ReminderStatus.Scheduled)
@@ -92,7 +92,7 @@ public sealed class MedicationReminderStepDefinitions
     }
 
     [Then(@"el recordatorio del paciente (\d+) queda cancelado")]
-    public void ThenRecordatorioCancelado(long patientId)
+    public void ThenRecordatorioCancelado(int patientId)
     {
         _reminders.Store
             .Single(r => r.PatientId == patientId)

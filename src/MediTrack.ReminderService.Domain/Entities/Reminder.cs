@@ -20,7 +20,7 @@ public class Reminder
 
     public long Id { get; private set; }
 
-    public long PatientId { get; private set; }
+    public int PatientId { get; private set; }
 
     /// <summary>Tipo de entidad que originó el recordatorio (medication/appointment/exam).</summary>
     public ReminderEntityType EntityType { get; private set; }
@@ -48,7 +48,7 @@ public class Reminder
     /// Mantiene el constructor cerrado y centraliza la validación de invariantes.
     /// </summary>
     internal static Reminder Schedule(
-        long patientId,
+        int patientId,
         ReminderEntityType entityType,
         long entityId,
         DateTime scheduledAt,
@@ -80,7 +80,7 @@ public class Reminder
     /// capa de aplicación; se programa para envío inmediato.
     /// </summary>
     public static Reminder CreateAlert(
-        long patientId,
+        int patientId,
         ReminderEntityType entityType,
         long entityId,
         DateTime whenUtc,
