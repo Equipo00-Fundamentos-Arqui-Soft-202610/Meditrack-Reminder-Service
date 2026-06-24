@@ -10,7 +10,20 @@ var builder = WebApplication.CreateBuilder(args);
 // --- Servicios ---
 builder.Services.AddControllers();
 builder.Services.AddSwaggerDocumentation();
-builder.Services.AddJwtAuthentication(builder.Configuration);
+
+var disableAuth = builder.Configuration.GetValue<bool>("DisableAuth");
+if (disableAuth)
+{
+    builder.Services.AddAuthentication();
+    builder.Services.AddAuthorization(opts =>
+        opts.DefaultPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
+            .RequireAssertion(_ => true)
+            .Build());
+}
+else
+{
+    builder.Services.AddJwtAuthentication(builder.Configuration);
+}
 
 builder.Services.AddApplication(builder.Configuration);
 builder.Services.AddInfrastructure(builder.Configuration);
