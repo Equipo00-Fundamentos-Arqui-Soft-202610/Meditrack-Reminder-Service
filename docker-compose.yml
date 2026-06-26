@@ -50,7 +50,7 @@ services:
       RabbitMq__Password: "guest"
       Jwt__Issuer: "meditrack-gateway"
       Jwt__Audience: "meditrack-services"
-      Jwt__Key: "CHANGE_ME_super_secret_signing_key_min_32_chars_long!"
+      Jwt__Key: "217e8f83ebc2a45cc3e8f72c71316467a4481aad1e0d71e359e85418d66ca0df"
       Fcm__SimulateDelivery: "true"
     ports:
       - "8080:8080"
