@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using MediTrack.ReminderService.Application.IntegrationEvents;
 using MediTrack.ReminderService.Application.Services;
 using MediTrack.ReminderService.Infrastructure.Persistence;
@@ -67,6 +68,13 @@ public sealed class RabbitMqEventConsumerHostedService : BackgroundService
             }
 
             await ProcessAsync(integrationEvent);
+            _channel!.BasicAck(args.DeliveryTag, multiple: false);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogError(ex,
+                "Evento '{EventType}' con payload inválido, no se puede deserializar. Se descarta (no es recuperable con reintentos).",
+                eventType);
             _channel!.BasicAck(args.DeliveryTag, multiple: false);
         }
         catch (Exception ex)
