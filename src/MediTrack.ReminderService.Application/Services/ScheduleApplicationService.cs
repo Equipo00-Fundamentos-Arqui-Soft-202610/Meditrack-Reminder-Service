@@ -104,7 +104,24 @@ public sealed class ScheduleApplicationService
             return;
         }
 
-        foreach (var reminder in pending)
+        var limaTimeZone = TimeZoneInfo.FindSystemTimeZoneById("SA Pacific Standard Time");
+        var targetLocalDate = TimeZoneInfo.ConvertTimeFromUtc(
+            DateTime.SpecifyKind(@event.OccurrenceDateUtc, DateTimeKind.Utc), limaTimeZone).Date;
+
+        var matching = pending
+            .Where(r => TimeZoneInfo.ConvertTimeFromUtc(
+                DateTime.SpecifyKind(r.ScheduledAt, DateTimeKind.Utc), limaTimeZone).Date == targetLocalDate)
+            .ToList();
+
+        if (matching.Count == 0)
+        {
+            _logger.LogDebug(
+                "Ningún recordatorio pendiente coincide con la fecha {Date} para {EntityType} {EntityId} (paciente {PatientId}). {Total} pendientes en otras fechas no se tocan.",
+                targetLocalDate, @event.EntityType, @event.EntityId, @event.PatientId, pending.Count);
+            return;
+        }
+
+        foreach (var reminder in matching)
         {
             reminder.Cancel(_clock.UtcNow);
             _reminders.Update(reminder);
@@ -112,8 +129,8 @@ public sealed class ScheduleApplicationService
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
         _logger.LogInformation(
-            "Cancelados {Count} recordatorios tras cumplimiento de {EntityType} {EntityId}.",
-            pending.Count, @event.EntityType, @event.EntityId);
+            "Cancelados {Count} de {Total} recordatorios pendientes (fecha {Date}) tras cumplimiento de {EntityType} {EntityId}.",
+            matching.Count, pending.Count, targetLocalDate, @event.EntityType, @event.EntityId);
     }
 
     /// <summary>Lista los recordatorios activos del paciente (GET /reminders/patients/{patientId}).</summary>
