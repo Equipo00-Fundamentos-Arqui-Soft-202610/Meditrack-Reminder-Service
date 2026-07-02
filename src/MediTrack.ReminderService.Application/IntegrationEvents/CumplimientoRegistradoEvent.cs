@@ -16,4 +16,7 @@ public sealed record CumplimientoRegistradoEvent : IntegrationEvent
     public ReminderEntityType EntityType { get; init; }
 
     public long EntityId { get; init; }
+
+    /// <summary>Instante UTC de la ocurrencia específica que fue cumplida (ej. "toma de hoy a las 8am").</summary>
+    public DateTime OccurrenceDateUtc { get; init; }
 }

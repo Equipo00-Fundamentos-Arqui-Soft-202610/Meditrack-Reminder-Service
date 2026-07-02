@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using MediTrack.ReminderService.Application.IntegrationEvents;
 
 namespace MediTrack.ReminderService.Infrastructure.Messaging;
@@ -12,7 +13,7 @@ public sealed class IntegrationEventSerializer
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
-        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase, allowIntegerValues: true) }
     };
 
     private static readonly IReadOnlyDictionary<string, Type> InboundTypes = new Dictionary<string, Type>
