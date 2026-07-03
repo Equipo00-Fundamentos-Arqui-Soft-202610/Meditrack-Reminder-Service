@@ -114,6 +114,9 @@ public sealed class RabbitMqEventConsumerHostedService : BackgroundService
             case StockBajoEvent e:
                 await schedule.HandleStockBajoAsync(e);
                 break;
+            case ExamenCreadoEvent e:
+                await schedule.HandleExamenCreadoAsync(e);
+                break;
             default:
                 _logger.LogWarning("Sin manejador para el evento {EventType}.", integrationEvent.EventType);
                 return;

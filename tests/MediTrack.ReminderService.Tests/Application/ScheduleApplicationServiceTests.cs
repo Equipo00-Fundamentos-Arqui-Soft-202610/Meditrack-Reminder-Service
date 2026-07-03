@@ -19,12 +19,15 @@ public sealed class ScheduleApplicationServiceTests
         var provider = new ReminderFactoryProvider(new ReminderFactory[]
         {
             new MedicationReminderFactory(),
-            new AppointmentReminderFactory(),
+            new AppointmentReminderFactory(
+                TimeSpan.FromHours(24), AppointmentReminderFactory.TwentyFourHourBody),
             new ExamReminderFactory()
         });
         var service = new ScheduleApplicationService(
             reminders, provider, new FakeUnitOfWork(), new FakeClock(Now),
-            NullLogger<ScheduleApplicationService>.Instance);
+            NullLogger<ScheduleApplicationService>.Instance,
+            new AppointmentReminderFactory(
+                TimeSpan.FromHours(2), AppointmentReminderFactory.TwoHourBody));
         return (service, reminders);
     }
 

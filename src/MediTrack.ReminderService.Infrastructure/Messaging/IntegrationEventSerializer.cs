@@ -21,7 +21,8 @@ public sealed class IntegrationEventSerializer
         ["RecetaCargada"] = typeof(RecetaCargadaEvent),
         ["CitaAgendada"] = typeof(CitaAgendadaEvent),
         ["CumplimientoRegistrado"] = typeof(CumplimientoRegistradoEvent),
-        ["StockBajo"] = typeof(StockBajoEvent)
+        ["StockBajo"] = typeof(StockBajoEvent),
+        ["ExamenCreado"] = typeof(ExamenCreadoEvent)
     };
 
     public string Serialize(IntegrationEvent integrationEvent) =>

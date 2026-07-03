@@ -12,7 +12,8 @@ public sealed class RabbitMqConnection : IDisposable
 {
     private static readonly string[] ConsumedRoutingKeys =
     {
-        "RecetaCargada", "CitaAgendada", "CumplimientoRegistrado", "StockBajo"
+        "RecetaCargada", "CitaAgendada", "CumplimientoRegistrado", "StockBajo",
+        "ExamenCreado"
     };
 
     private readonly RabbitMqOptions _options;

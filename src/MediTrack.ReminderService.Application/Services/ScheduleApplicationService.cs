@@ -21,19 +21,22 @@ public sealed class ScheduleApplicationService
     private readonly IUnitOfWork _unitOfWork;
     private readonly Abstractions.IClock _clock;
     private readonly ILogger<ScheduleApplicationService> _logger;
+    private readonly AppointmentReminderFactory _twoHourFactory;
 
     public ScheduleApplicationService(
         IReminderRepository reminders,
         IReminderFactoryProvider factories,
         IUnitOfWork unitOfWork,
         Abstractions.IClock clock,
-        ILogger<ScheduleApplicationService> logger)
+        ILogger<ScheduleApplicationService> logger,
+        AppointmentReminderFactory twoHourFactory)
     {
         _reminders = reminders;
         _factories = factories;
         _unitOfWork = unitOfWork;
         _clock = clock;
         _logger = logger;
+        _twoHourFactory = twoHourFactory;
     }
 
     /// <summary>Genera un recordatorio de medicación por cada toma de la receta (US05/US13).</summary>
@@ -55,20 +58,51 @@ public sealed class ScheduleApplicationService
             @event.Medications.Count, @event.PatientId, @event.PrescriptionId);
     }
 
-    /// <summary>Genera un recordatorio de cita con 24 h de anticipación (US09).</summary>
+    /// <summary>
+    /// Genera dos recordatorios de cita: uno con 24 h de anticipación (US09) y otro
+    /// con 2 h de anticipación.
+    /// </summary>
     public async Task HandleCitaAgendadaAsync(CitaAgendadaEvent @event, CancellationToken cancellationToken = default)
     {
         var factory = _factories.For(ReminderEntityType.Appointment);
         var context = new ReminderCreationContext(
             @event.PatientId, @event.AppointmentId, @event.AppointmentDateUtc, @event.AppointmentType, @event.Location);
 
+        var reminder24h = factory.CreateReminder(context);
+        await _reminders.AddAsync(reminder24h, cancellationToken);
+
+        var reminder2h = _twoHourFactory.CreateReminder(context);
+        await _reminders.AddAsync(reminder2h, cancellationToken);
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        _logger.LogInformation(
+            "Generados recordatorios de cita {AppointmentId} para el paciente {PatientId} (24 h y 2 h).",
+            @event.AppointmentId, @event.PatientId);
+    }
+
+    /// <summary>Genera un recordatorio de examen con 2 h de anticipación al recojo (US12).</summary>
+    public async Task HandleExamenCreadoAsync(ExamenCreadoEvent @event, CancellationToken cancellationToken = default)
+    {
+        if (@event.PickupDate is null)
+        {
+            _logger.LogDebug(
+                "Examen {ExamId} sin fecha de recojo; no se genera recordatorio.",
+                @event.ExamId);
+            return;
+        }
+
+        var factory = _factories.For(ReminderEntityType.Exam);
+        var context = new ReminderCreationContext(
+            @event.PatientId, @event.ExamId, @event.PickupDate.Value, @event.ExamType);
+
         var reminder = factory.CreateReminder(context);
         await _reminders.AddAsync(reminder, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         _logger.LogInformation(
-            "Generado recordatorio de cita {AppointmentId} para el paciente {PatientId}.",
-            @event.AppointmentId, @event.PatientId);
+            "Generado recordatorio de examen {ExamId} para el paciente {PatientId}.",
+            @event.ExamId, @event.PatientId);
     }
 
     /// <summary>Genera una alerta inmediata de stock bajo (US07).</summary>
