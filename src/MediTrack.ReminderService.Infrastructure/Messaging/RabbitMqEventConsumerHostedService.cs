@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using MediTrack.ReminderService.Application.IntegrationEvents;
 using MediTrack.ReminderService.Application.Services;
 using MediTrack.ReminderService.Infrastructure.Persistence;
@@ -66,7 +67,27 @@ public sealed class RabbitMqEventConsumerHostedService : BackgroundService
                 return;
             }
 
+            var validationError = ValidateRequiredFields(integrationEvent);
+            if (validationError is not null)
+            {
+                // Datos incompletos (p. ej. un campo requerido en null) no son un
+                // fallo transitorio: reencolar solo repetiría el mismo error para
+                // siempre. Se descarta y se deja registrado para investigar al productor.
+                _logger.LogError(
+                    "Evento '{EventType}' con datos inválidos: {Reason}. Se descarta sin reintentar.",
+                    eventType, validationError);
+                _channel!.BasicAck(args.DeliveryTag, multiple: false);
+                return;
+            }
+
             await ProcessAsync(integrationEvent);
+            _channel!.BasicAck(args.DeliveryTag, multiple: false);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogError(ex,
+                "Evento '{EventType}' con payload inválido, no se puede deserializar. Se descarta (no es recuperable con reintentos).",
+                eventType);
             _channel!.BasicAck(args.DeliveryTag, multiple: false);
         }
         catch (Exception ex)
@@ -75,6 +96,22 @@ public sealed class RabbitMqEventConsumerHostedService : BackgroundService
             _channel!.BasicNack(args.DeliveryTag, multiple: false, requeue: true);
         }
     }
+
+    /// <summary>
+    /// Chequeo defensivo de campos requeridos antes de invocar al handler. Un JSON
+    /// válido puede igual traer un campo requerido en null (p. ej. "medications":
+    /// null en RecetaCargadaEvent) — sin esto, el handler revienta con
+    /// NullReferenceException y el mensaje reencola para siempre.
+    /// </summary>
+    private static string? ValidateRequiredFields(IntegrationEvent integrationEvent) => integrationEvent switch
+    {
+        RecetaCargadaEvent e when e.Medications is null => "Medications es null",
+        CitaAgendadaEvent e when string.IsNullOrWhiteSpace(e.AppointmentType) => "AppointmentType es nulo o vacío",
+        CumplimientoRegistradoEvent e when e.EntityId <= 0 => "EntityId inválido",
+        StockBajoEvent e when string.IsNullOrWhiteSpace(e.MedicationName) => "MedicationName es nulo o vacío",
+        ExamenCreadoEvent e when string.IsNullOrWhiteSpace(e.ExamType) => "ExamType es nulo o vacío",
+        _ => null
+    };
 
     private async Task ProcessAsync(IntegrationEvent integrationEvent)
     {
@@ -105,6 +142,9 @@ public sealed class RabbitMqEventConsumerHostedService : BackgroundService
                 break;
             case StockBajoEvent e:
                 await schedule.HandleStockBajoAsync(e);
+                break;
+            case ExamenCreadoEvent e:
+                await schedule.HandleExamenCreadoAsync(e);
                 break;
             default:
                 _logger.LogWarning("Sin manejador para el evento {EventType}.", integrationEvent.EventType);

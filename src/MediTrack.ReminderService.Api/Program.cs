@@ -22,6 +22,15 @@ if (disableAuth)
 }
 else
 {
+    // Valores reales vía user-secrets en desarrollo, vía variables de entorno
+    // en producción. Nunca en appsettings.json (ver README).
+    builder.Services.AddOptions<JwtOptions>()
+        .Bind(builder.Configuration.GetSection(JwtOptions.SectionName))
+        .Validate(o => !string.IsNullOrWhiteSpace(o.Key), "Jwt:Key es obligatorio")
+        .Validate(o => !string.IsNullOrWhiteSpace(o.Issuer), "Jwt:Issuer es obligatorio")
+        .Validate(o => !string.IsNullOrWhiteSpace(o.Audience), "Jwt:Audience es obligatorio")
+        .ValidateOnStart();
+
     builder.Services.AddJwtAuthentication(builder.Configuration);
 }
 

@@ -18,10 +18,17 @@ public static class DependencyInjection
             configuration.GetSection(ReminderNotificationOptions.SectionName));
 
         // Fábricas concretas del patrón Factory Method (una por tipo de recordatorio).
+        // La fábrica de citas se registra para el proveedor con leadTime 24 h.
+        services.AddSingleton<ReminderFactory>(sp =>
+            new AppointmentReminderFactory(TimeSpan.FromHours(24), AppointmentReminderFactory.TwentyFourHourBody));
         services.AddSingleton<ReminderFactory, MedicationReminderFactory>();
-        services.AddSingleton<ReminderFactory, AppointmentReminderFactory>();
         services.AddSingleton<ReminderFactory, ExamReminderFactory>();
         services.AddSingleton<IReminderFactoryProvider, ReminderFactoryProvider>();
+
+        // Segunda instancia (2 h) inyectada directamente; no pasa por el proveedor
+        // porque comparte EntityType.Appointment.
+        services.AddSingleton<AppointmentReminderFactory>(sp =>
+            new AppointmentReminderFactory(TimeSpan.FromHours(2), AppointmentReminderFactory.TwoHourBody));
 
         // Application Services (uno por controlador / responsabilidad).
         services.AddScoped<ScheduleApplicationService>();

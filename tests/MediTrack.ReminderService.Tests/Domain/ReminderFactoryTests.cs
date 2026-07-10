@@ -26,7 +26,8 @@ public sealed class ReminderFactoryTests
     [Fact]
     public void AppointmentFactory_schedules_24_hours_before()
     {
-        var factory = new AppointmentReminderFactory();
+        var factory = new AppointmentReminderFactory(
+            TimeSpan.FromHours(24), AppointmentReminderFactory.TwentyFourHourBody);
         var context = new ReminderCreationContext(1, 70, Event, "Cardiología", "Sede San Borja");
 
         var reminder = factory.CreateReminder(context);
@@ -55,7 +56,8 @@ public sealed class ReminderFactoryTests
         var provider = new ReminderFactoryProvider(new ReminderFactory[]
         {
             new MedicationReminderFactory(),
-            new AppointmentReminderFactory(),
+            new AppointmentReminderFactory(
+                TimeSpan.FromHours(24), AppointmentReminderFactory.TwentyFourHourBody),
             new ExamReminderFactory()
         });
 
