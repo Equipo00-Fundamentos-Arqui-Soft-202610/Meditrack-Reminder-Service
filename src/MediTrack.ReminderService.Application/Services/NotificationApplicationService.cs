@@ -127,10 +127,12 @@ public sealed class NotificationApplicationService
     private bool ActivateLocalFallback(Reminder reminder)
     {
         // AC-09: la app programa una notificación local sobre su almacenamiento
-        // offline. Se registra el handoff como canal de respaldo.
-        reminder.RegisterDeliveryAttempt(NotificationChannel.Local, DeliveryStatus.Delivered, _clock.UtcNow);
+        // offline. El backend no puede confirmar que el dispositivo la mostró, así
+        // que se registra como RequiresManualFollowUp, no como Delivered.
+        reminder.RegisterDeliveryAttempt(NotificationChannel.Local, DeliveryStatus.RequiresManualFollowUp, _clock.UtcNow);
         _logger.LogInformation(
-            "Activado fallback local para el recordatorio {ReminderId} tras agotar los reintentos push.", reminder.Id);
+            "Activado fallback local para el recordatorio {ReminderId} tras agotar los reintentos push; " +
+            "queda pendiente de confirmación del lado del cliente.", reminder.Id);
         return true;
     }
 
