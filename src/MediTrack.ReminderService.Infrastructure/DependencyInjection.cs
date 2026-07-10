@@ -58,7 +58,6 @@ public static class DependencyInjection
         services.Configure<RabbitMqOptions>(configuration.GetSection(RabbitMqOptions.SectionName));
         services.AddSingleton<IntegrationEventSerializer>();
         services.AddSingleton<RabbitMqConnection>();
-        services.AddScoped<IIntegrationEventPublisher, OutboxIntegrationEventPublisher>();
     }
 
     private static void AddNotifications(IServiceCollection services, IConfiguration configuration)

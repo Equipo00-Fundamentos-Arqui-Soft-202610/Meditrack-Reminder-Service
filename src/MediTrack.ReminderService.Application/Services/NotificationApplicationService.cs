@@ -13,15 +13,13 @@ namespace MediTrack.ReminderService.Application.Services;
 /// "Notification Application Service" (Fig. 17): orquesta el disparo de la
 /// notificación push de un recordatorio vencido. Aplica las preferencias del
 /// paciente, ejecuta reintentos con backoff exponencial ante fallos de FCM (AC-02),
-/// activa el fallback local (AC-09), registra la bitácora y publica
-/// <see cref="RecordatorioEnviadoEvent"/> vía Outbox.
+/// activa el fallback local (AC-09) y registra la bitácora.
 /// </summary>
 public sealed class NotificationApplicationService
 {
     private readonly IReminderRepository _reminders;
     private readonly INotificationPreferenceRepository _preferences;
     private readonly INotificationSender _sender;
-    private readonly IIntegrationEventPublisher _publisher;
     private readonly IUnitOfWork _unitOfWork;
     private readonly IClock _clock;
     private readonly IDelayProvider _delay;
@@ -32,7 +30,6 @@ public sealed class NotificationApplicationService
         IReminderRepository reminders,
         INotificationPreferenceRepository preferences,
         INotificationSender sender,
-        IIntegrationEventPublisher publisher,
         IUnitOfWork unitOfWork,
         IClock clock,
         IDelayProvider delay,
@@ -42,7 +39,6 @@ public sealed class NotificationApplicationService
         _reminders = reminders;
         _preferences = preferences;
         _sender = sender;
-        _publisher = publisher;
         _unitOfWork = unitOfWork;
         _clock = clock;
         _delay = delay;
@@ -74,7 +70,6 @@ public sealed class NotificationApplicationService
             // mientras el paciente mantenga las notificaciones apagadas.
             reminder.MarkAsFailed();
             _reminders.Update(reminder);
-            await PublishOutcomeAsync(reminder, delivered: false, cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
 
             return false;
@@ -90,7 +85,6 @@ public sealed class NotificationApplicationService
             reminder.MarkAsFailed();
 
         _reminders.Update(reminder);
-        await PublishOutcomeAsync(reminder, delivered, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return delivered;
@@ -145,20 +139,4 @@ public sealed class NotificationApplicationService
             preference.SoundEnabled,
             preference.VibrationEnabled,
             channel);
-
-    private async Task PublishOutcomeAsync(Reminder reminder, bool delivered, CancellationToken cancellationToken)
-    {
-        var lastChannel = reminder.NotificationLogs.LastOrDefault()?.Channel ?? NotificationChannel.Push;
-        var @event = new RecordatorioEnviadoEvent
-        {
-            ReminderId = reminder.Id,
-            PatientId = reminder.PatientId,
-            EntityType = reminder.EntityType,
-            EntityId = reminder.EntityId,
-            Channel = lastChannel,
-            Delivered = delivered,
-            SentAtUtc = _clock.UtcNow
-        };
-        await _publisher.EnqueueAsync(@event, cancellationToken);
-    }
 }

@@ -1,6 +1,5 @@
 using FluentAssertions;
 using MediTrack.ReminderService.Application.Configuration;
-using MediTrack.ReminderService.Application.IntegrationEvents;
 using MediTrack.ReminderService.Application.Services;
 using MediTrack.ReminderService.Domain.Entities;
 using MediTrack.ReminderService.Domain.Enums;
@@ -22,7 +21,6 @@ public sealed class NotificationApplicationServiceTests
 
     private static (NotificationApplicationService service,
                     InMemoryReminderRepository reminders,
-                    RecordingEventPublisher publisher,
                     ImmediateDelayProvider delay)
         Build(FakeNotificationSender sender, NotificationPreference? preference = null)
     {
@@ -31,7 +29,6 @@ public sealed class NotificationApplicationServiceTests
         if (preference is not null)
             preferences.Seed(preference);
 
-        var publisher = new RecordingEventPublisher();
         var delay = new ImmediateDelayProvider();
         var options = Options.Create(new ReminderNotificationOptions
         {
@@ -41,17 +38,17 @@ public sealed class NotificationApplicationServiceTests
         });
 
         var service = new NotificationApplicationService(
-            reminders, preferences, sender, publisher, new FakeUnitOfWork(),
+            reminders, preferences, sender, new FakeUnitOfWork(),
             new FakeClock(Now), delay, options, NullLogger<NotificationApplicationService>.Instance);
 
-        return (service, reminders, publisher, delay);
+        return (service, reminders, delay);
     }
 
     [Fact]
     public async Task Dispatch_delivers_on_first_attempt()
     {
         var sender = FakeNotificationSender.AlwaysSucceeds();
-        var (service, _, publisher, _) = Build(sender);
+        var (service, _, _) = Build(sender);
         var reminder = DueReminder();
 
         var delivered = await service.DispatchAsync(reminder);
@@ -59,14 +56,13 @@ public sealed class NotificationApplicationServiceTests
         delivered.Should().BeTrue();
         sender.Attempts.Should().Be(1);
         reminder.Status.Should().Be(ReminderStatus.Sent);
-        publisher.Published.Should().ContainSingle(e => e is RecordatorioEnviadoEvent);
     }
 
     [Fact]
     public async Task Dispatch_retries_with_backoff_then_falls_back_to_local()
     {
         var sender = FakeNotificationSender.AlwaysFails();
-        var (service, _, publisher, delay) = Build(sender);
+        var (service, _, delay) = Build(sender);
         var reminder = DueReminder();
 
         var delivered = await service.DispatchAsync(reminder);
@@ -75,7 +71,6 @@ public sealed class NotificationApplicationServiceTests
         sender.Attempts.Should().Be(3); // agotó MaxAttempts en push
         delay.DelayCount.Should().Be(2); // backoff entre los 3 intentos
         reminder.NotificationLogs.Should().Contain(l => l.Channel == NotificationChannel.Local);
-        publisher.Published.OfType<RecordatorioEnviadoEvent>().Single().Delivered.Should().BeTrue();
     }
 
     [Fact]
@@ -84,7 +79,7 @@ public sealed class NotificationApplicationServiceTests
         var preference = NotificationPreference.Default(100);
         preference.Update(soundEnabled: true, vibrationEnabled: true, repeatCount: 1, globalEnabled: false);
         var sender = FakeNotificationSender.AlwaysSucceeds();
-        var (service, _, _, _) = Build(sender, preference);
+        var (service, _, _) = Build(sender, preference);
         var reminder = DueReminder();
 
         var delivered = await service.DispatchAsync(reminder);
