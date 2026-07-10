@@ -1,5 +1,4 @@
 using MediTrack.ReminderService.Application.Abstractions;
-using MediTrack.ReminderService.Application.IntegrationEvents;
 using MediTrack.ReminderService.Domain.Repositories;
 
 namespace MediTrack.ReminderService.Tests.TestDoubles;
@@ -43,18 +42,6 @@ public sealed class FakeNotificationSender : INotificationSender
         return Task.FromResult(_successByAttempt(current)
             ? NotificationDeliveryResult.Ok("fake")
             : NotificationDeliveryResult.Fail("fake failure"));
-    }
-}
-
-/// <summary>Publicador que acumula los eventos encolados al Outbox.</summary>
-public sealed class RecordingEventPublisher : IIntegrationEventPublisher
-{
-    public List<IntegrationEvent> Published { get; } = new();
-
-    public Task EnqueueAsync(IntegrationEvent integrationEvent, CancellationToken cancellationToken = default)
-    {
-        Published.Add(integrationEvent);
-        return Task.CompletedTask;
     }
 }
 
