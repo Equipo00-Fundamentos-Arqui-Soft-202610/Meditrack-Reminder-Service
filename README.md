@@ -64,3 +64,27 @@ Para correr con `docker compose`, `Jwt__Key` se toma de un `.env` local
 export JWT_KEY="<pedile la clave al equipo>"
 docker compose up
 ```
+
+### FCM en docker compose
+
+Para que el contenedor mande push notifications reales (no simuladas) necesitás
+el archivo JSON de credenciales de la cuenta de servicio de Firebase (el mismo
+que usás en local con `dotnet user-secrets set "Fcm:CredentialsPath" "<ruta>"`)
+y el `ProjectId` del proyecto de Firebase. Ninguno de los dos se hardcodea en
+`docker-compose.yml` -- se pasan como variables de entorno del shell antes de
+levantar el compose:
+
+```bash
+export FCM_PROJECT_ID="meditrack-app-si657"
+export FCM_CREDENTIALS_HOST_PATH="/ruta/absoluta/a/tu/service-account.json"
+# Opcional: por defecto SimulateDelivery=false (push real). Poné "true" si
+# todavía no tenés credenciales y querés levantar el servicio igual.
+export FCM_SIMULATE_DELIVERY=false
+docker compose up
+```
+
+`FCM_CREDENTIALS_HOST_PATH` se monta como volumen de solo lectura dentro del
+contenedor en `/app/firebase-credentials.json`, y `Fcm__CredentialsPath` ya
+apunta a esa ruta interna. Si falta `FCM_PROJECT_ID` o
+`FCM_CREDENTIALS_HOST_PATH`, `docker compose up` falla con un mensaje
+explicando qué variable falta.

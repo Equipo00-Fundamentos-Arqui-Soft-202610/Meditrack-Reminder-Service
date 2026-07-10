@@ -53,7 +53,14 @@ services:
       # docker-compose sustituye ${JWT_KEY} desde un archivo .env local (no
       # commiteado) o una variable de entorno del shell -- nunca hardcodeado acá.
       Jwt__Key: "${JWT_KEY:?falta JWT_KEY -- ver README}"
-      Fcm__SimulateDelivery: "true"
+      # Igual que JWT_KEY: nada de credenciales reales hardcodeadas acá.
+      # Por defecto SimulateDelivery=false (push real) -- se puede forzar a
+      # "true" seteando FCM_SIMULATE_DELIVERY si todavía no tenés credenciales.
+      Fcm__SimulateDelivery: "${FCM_SIMULATE_DELIVERY:-false}"
+      Fcm__ProjectId: "${FCM_PROJECT_ID:?falta FCM_PROJECT_ID -- ver README}"
+      Fcm__CredentialsPath: "/app/firebase-credentials.json"
+    volumes:
+      - ${FCM_CREDENTIALS_HOST_PATH:?falta FCM_CREDENTIALS_HOST_PATH -- ver README}:/app/firebase-credentials.json:ro
     ports:
       - "8080:8080"
 
