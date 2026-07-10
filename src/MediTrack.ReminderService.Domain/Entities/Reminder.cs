@@ -103,7 +103,10 @@ public class Reminder
         var log = NotificationLog.Create(channel, deliveryStatus, attemptedAtUtc);
         _notificationLogs.Add(log);
 
-        if (deliveryStatus == DeliveryStatus.Delivered)
+        // RequiresManualFollowUp (fallback local, AC-09) también cierra el ciclo de
+        // reintentos del Scheduler: el backend ya hizo su parte (handoff al cliente),
+        // aunque no pueda confirmar la entrega real como con Delivered.
+        if (deliveryStatus is DeliveryStatus.Delivered or DeliveryStatus.RequiresManualFollowUp)
             Status = ReminderStatus.Sent;
 
         return log;
