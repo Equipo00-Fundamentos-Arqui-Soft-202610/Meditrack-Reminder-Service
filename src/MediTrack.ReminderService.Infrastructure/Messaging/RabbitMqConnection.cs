@@ -64,7 +64,31 @@ public sealed class RabbitMqConnection : IDisposable
     {
         var channel = GetConnection().CreateModel();
         channel.ExchangeDeclare(_options.ExchangeName, ExchangeType.Topic, durable: true, autoDelete: false);
-        channel.QueueDeclare(_options.QueueName, durable: true, exclusive: false, autoDelete: false);
+
+        var dlxName = $"{_options.ExchangeName}.dlx";
+        var dlqName = $"{_options.QueueName}.dlq";
+        channel.ExchangeDeclare(dlxName, ExchangeType.Fanout, durable: true);
+        channel.QueueDeclare(dlqName, durable: true, exclusive: false, autoDelete: false);
+        channel.QueueBind(dlqName, dlxName, routingKey: "");
+
+        var queueArgs = new Dictionary<string, object> { { "x-dead-letter-exchange", dlxName } };
+        try
+        {
+            channel.QueueDeclare(_options.QueueName, durable: true, exclusive: false, autoDelete: false, arguments: queueArgs);
+        }
+        catch (RabbitMQ.Client.Exceptions.OperationInterruptedException)
+        {
+            _logger.LogWarning(
+                "La cola {QueueName} existía con argumentos distintos; se recrea con soporte de DLQ.",
+                _options.QueueName);
+            channel = GetConnection().CreateModel();
+            channel.ExchangeDeclare(_options.ExchangeName, ExchangeType.Topic, durable: true, autoDelete: false);
+            channel.ExchangeDeclare(dlxName, ExchangeType.Fanout, durable: true);
+            channel.QueueDeclare(dlqName, durable: true, exclusive: false, autoDelete: false);
+            channel.QueueBind(dlqName, dlxName, routingKey: "");
+            channel.QueueDelete(_options.QueueName);
+            channel.QueueDeclare(_options.QueueName, durable: true, exclusive: false, autoDelete: false, arguments: queueArgs);
+        }
 
         foreach (var routingKey in ConsumedRoutingKeys)
             channel.QueueBind(_options.QueueName, _options.ExchangeName, routingKey);

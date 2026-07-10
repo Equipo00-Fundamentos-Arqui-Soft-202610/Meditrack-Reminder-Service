@@ -92,8 +92,18 @@ public sealed class RabbitMqEventConsumerHostedService : BackgroundService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error procesando el evento '{EventType}'. Se reencolará.", eventType);
-            _channel!.BasicNack(args.DeliveryTag, multiple: false, requeue: true);
+            if (args.Redelivered)
+            {
+                _logger.LogError(ex,
+                    "Error persistente procesando el evento '{EventType}' tras reintento; se envía a DLQ.",
+                    eventType);
+                _channel!.BasicNack(args.DeliveryTag, multiple: false, requeue: false);
+            }
+            else
+            {
+                _logger.LogWarning(ex, "Error procesando el evento '{EventType}'; se reintenta una vez.", eventType);
+                _channel!.BasicNack(args.DeliveryTag, multiple: false, requeue: true);
+            }
         }
     }
 
