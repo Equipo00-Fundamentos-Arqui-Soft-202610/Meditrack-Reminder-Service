@@ -50,7 +50,9 @@ services:
       RabbitMq__Password: "guest"
       Jwt__Issuer: "meditrack-gateway"
       Jwt__Audience: "meditrack-services"
-      Jwt__Key: "217e8f83ebc2a45cc3e8f72c71316467a4481aad1e0d71e359e85418d66ca0df"
+      # docker-compose sustituye ${JWT_KEY} desde un archivo .env local (no
+      # commiteado) o una variable de entorno del shell -- nunca hardcodeado acá.
+      Jwt__Key: "${JWT_KEY:?falta JWT_KEY -- ver README}"
       Fcm__SimulateDelivery: "true"
     ports:
       - "8080:8080"

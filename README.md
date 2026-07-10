@@ -43,3 +43,24 @@ dotnet test
 Las claves principales (`ConnectionStrings:ReminderDb`, `RabbitMq:*`, `Jwt:*`, `Fcm:*`)
 se definen en `appsettings.json` y se sobreescriben por variables de entorno.
 Los secretos no se versionan.
+
+### Secretos en desarrollo local
+
+`Jwt:Key` está vacío en `appsettings.json` a propósito -- es compartido con el
+Gateway, Identity Service, Treatment-service y FollowUp-Service, así que cada
+dev lo configura una vez en su máquina con:
+
+```bash
+dotnet user-secrets set "Jwt:Key" "<pedile la clave al equipo>" --project src/MediTrack.ReminderService.Api
+```
+
+En producción, esa misma variable se setea como `Jwt__Key` en el entorno del
+proveedor de deploy (Render, etc.) -- nunca en un archivo del repo.
+
+Para correr con `docker compose`, `Jwt__Key` se toma de un `.env` local
+(no versionado) o de una variable de entorno del shell:
+
+```bash
+export JWT_KEY="<pedile la clave al equipo>"
+docker compose up
+```
