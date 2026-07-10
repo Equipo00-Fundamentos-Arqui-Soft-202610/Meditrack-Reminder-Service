@@ -48,7 +48,9 @@ public sealed class RabbitMqConnection : IDisposable
                 Password = _options.Password,
                 VirtualHost = _options.VirtualHost,
                 DispatchConsumersAsync = true,
-                AutomaticRecoveryEnabled = true
+                AutomaticRecoveryEnabled = true,
+                RequestedHeartbeat = TimeSpan.FromSeconds(30),
+                NetworkRecoveryInterval = TimeSpan.FromSeconds(10)
             };
 
             _connection = factory.CreateConnection("meditrack-reminder-service");
