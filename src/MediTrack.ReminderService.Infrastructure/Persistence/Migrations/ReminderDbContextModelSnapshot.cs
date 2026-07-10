@@ -162,9 +162,9 @@ namespace MediTrack.ReminderService.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("MediTrack.ReminderService.Infrastructure.Persistence.OutboxMessage", b =>
                 {
-                    b.Property<Guid>("Id")
+                    b.Property<byte[]>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("char(36)")
+                        .HasColumnType("binary(16)")
                         .HasColumnName("id");
 
                     b.Property<int>("Attempts")
@@ -210,8 +210,8 @@ namespace MediTrack.ReminderService.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("MediTrack.ReminderService.Infrastructure.Persistence.ProcessedEvent", b =>
                 {
-                    b.Property<Guid>("EventId")
-                        .HasColumnType("char(36)")
+                    b.Property<byte[]>("EventId")
+                        .HasColumnType("binary(16)")
                         .HasColumnName("event_id");
 
                     b.Property<string>("EventType")

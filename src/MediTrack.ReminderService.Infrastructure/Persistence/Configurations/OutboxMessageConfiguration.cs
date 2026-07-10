@@ -10,7 +10,14 @@ internal sealed class OutboxMessageConfiguration : IEntityTypeConfiguration<Outb
         builder.ToTable("outbox_message");
 
         builder.HasKey(m => m.Id);
-        builder.Property(m => m.Id).HasColumnName("id");
+
+        // Se almacena como binary(16) en lugar del char(36) implícito de Pomelo:
+        // evita la collation ascii_general_ci, rechazada por TiDB Cloud
+        // ("new collation framework"), y es más compacto/rápido para índices.
+        builder.Property(m => m.Id)
+            .HasColumnName("id")
+            .HasConversion(id => id.ToByteArray(), bytes => new Guid(bytes))
+            .HasColumnType("binary(16)");
 
         builder.Property(m => m.EventType).HasColumnName("event_type").HasMaxLength(100).IsRequired();
         builder.Property(m => m.Payload).HasColumnName("payload").HasColumnType("json").IsRequired();
