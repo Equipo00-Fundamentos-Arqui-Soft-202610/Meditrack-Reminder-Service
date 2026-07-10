@@ -68,6 +68,15 @@ public sealed class NotificationApplicationService
             _logger.LogInformation(
                 "Notificaciones desactivadas para el paciente {PatientId}; se omite el recordatorio {ReminderId}.",
                 reminder.PatientId, reminder.Id);
+
+            // Sin esto, el recordatorio se queda en Scheduled y el Scheduler lo
+            // vuelve a evaluar (y a loguear) en cada ciclo, indefinidamente,
+            // mientras el paciente mantenga las notificaciones apagadas.
+            reminder.MarkAsFailed();
+            _reminders.Update(reminder);
+            await PublishOutcomeAsync(reminder, delivered: false, cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+
             return false;
         }
 

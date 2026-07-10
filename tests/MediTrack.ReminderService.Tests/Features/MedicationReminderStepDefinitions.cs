@@ -31,13 +31,14 @@ public sealed class MedicationReminderStepDefinitions
         var provider = new ReminderFactoryProvider(new ReminderFactory[]
         {
             new MedicationReminderFactory(),
-            new AppointmentReminderFactory(),
+            new AppointmentReminderFactory(TimeSpan.FromHours(24), AppointmentReminderFactory.TwentyFourHourBody),
             new ExamReminderFactory()
         });
         _service = new ScheduleApplicationService(
             _reminders, provider, new FakeUnitOfWork(),
             new FakeClock(new DateTime(2026, 6, 10, 0, 0, 0, DateTimeKind.Utc)),
-            NullLogger<ScheduleApplicationService>.Instance);
+            NullLogger<ScheduleApplicationService>.Instance,
+            new AppointmentReminderFactory(TimeSpan.FromHours(2), AppointmentReminderFactory.TwoHourBody));
     }
 
     [Given(@"una receta del paciente (\d+) con el medicamento ""(.*)"" dosis ""(.*)"" a las ""(.*)""")]
