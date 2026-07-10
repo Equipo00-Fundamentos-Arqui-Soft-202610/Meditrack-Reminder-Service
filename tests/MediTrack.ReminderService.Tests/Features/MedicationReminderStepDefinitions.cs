@@ -68,7 +68,8 @@ public sealed class MedicationReminderStepDefinitions
         {
             PatientId = patientId,
             EntityType = ReminderEntityType.Medication,
-            EntityId = medicationId
+            EntityId = medicationId,
+            OccurrenceDateUtc = _doseTimeUtc
         });
     }
 
